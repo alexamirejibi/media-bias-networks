@@ -1,5 +1,5 @@
 {
-    "louvain": {
-        
-    }
+    "louvain": [
+        {"parameter1":5,"parameter2":12}
+    ]
 }

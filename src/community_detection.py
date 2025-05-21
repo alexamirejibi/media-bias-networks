@@ -6,6 +6,7 @@ Given an adjacency matrix, compute communities
 import networkx as nx
 import numpy as np
 
+
 def louvain(adj_mat):
     """
     Detects communities using the Louvain algorithm.
