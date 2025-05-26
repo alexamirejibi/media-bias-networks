@@ -1,5 +1,5 @@
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, Counter
 import pandas as pd
 import random
 import json
@@ -10,33 +10,32 @@ from src.network_modeling import all_modeling_methods
 
 
 class Framework():
-    def __init__(self,data_dir):
-        self.all_datapoints = self.load_all_data(data_dir)
-        self.network_models = all_modeling_methods(1)
-        self.community_methods = all_comm_detection(1)
+    def __init__(self,data_dir,verbose=1):
+        self.data_all_days = self.load_all_data(data_dir)
+        self.network_models = all_modeling_methods(verbose)
+        self.community_methods = all_comm_detection(verbose)
+        self.data_dir = data_dir
         
         # defaultdict so don't have to struggle with creating the whole nested JSON structure
         # now we can just do: self.results['sample_1']['jaccard']['louvain']['hpset1']['results']
-        self.results = defaultdict(lambda: defaultdict(dict))
-
-    def nothing(self):
-        df = pd.read_csv(data_path,index_col='Unnamed: 0')
-        m = np.array(df)
-
-        return m
-
+        self.results = defaultdict(
+            lambda: defaultdict(
+                lambda: defaultdict(dict)
+            )
+        )
 
 
     # TODO Sort files by date?
-    def load_all_data(self,data_dir,starts_with='daily_co_occurrence'):
+    def load_all_data(self,data_dir=None,starts_with='matrix'):
         "Load the data from all days and put it in a list"
         files = [f for f in os.listdir(data_dir) if f.startswith(starts_with) and f.endswith('.csv')]
         dfs = [pd.read_csv(os.path.join(data_dir, f),index_col='Unnamed: 0') for f in files]
-        matrices = [np.array(df) for df in dfs]
-        return matrices
+        # matrices = [np.array(df) for df in dfs] # NOTE Outdated, as we want the cluster dfs to be the base data
+        if not dfs: raise ValueError("No data loaded, check provided data directory")
+        return dfs
 
-    
-    def start_experiment(self,n_samples,sample_size):
+
+    def run_experiment(self,n_samples,sample_size):
         "Starting point for the experiment"
         samples = self.load_samples(n_samples,sample_size)
         for s, sample in enumerate(samples):
@@ -69,7 +68,8 @@ class Framework():
                     "hyperparameters":hp,
                     "communities":communities
                 }
-                
+                print(sample_ID,modeling_method,comm_method_name,hp_ID)
+                print(result['communities'])
                 self.results[sample_ID][modeling_method][comm_method_name][hp_ID] = result
 
     def get_hyperparameters(self,comm_detection):
@@ -81,16 +81,24 @@ class Framework():
 
     def load_samples(self,n_samples,sample_size):
         "Loads 'n_samples' different samples of sample size 'sample_size'"
-        all_samples = [self.load_sample(sample_size) for _ in range(n_samples)]
+        all_samples = [self.sample_random_clusters(sample_size) for _ in range(n_samples)]
 
         return all_samples
 
 
-    def load_sample(self,sample_size):
-        "Samples 'sample_size' different datapoints from all the data"
-        sampled_datapoints = random.sample(self.all_datapoints,sample_size)
+    def sample_random_clusters(self,sample_size):
+        "Samples 'sample_size' different cluster days from all the data"
+        sampled_days = random.sample(self.data_all_days,sample_size)
 
-        aggregated_cooccurence_matrix = sum(sampled_datapoints)
+        # aggregated_cooccurence_matrix = sum(sampled_days) # NOTE this is outdated, as we are now concatenating cluster data
 
-        return aggregated_cooccurence_matrix
+        concatenated_sample_df = pd.concat(sampled_days, axis=1)
+        concatenated_sample_df = concatenated_sample_df.fillna(0)
+        concatenated_sample_df = concatenated_sample_df.astype(int)
 
+        return concatenated_sample_df
+
+
+    def cluster_data_to_cooccurrence(self,concatenated_df):
+        co_occurrence_matrix = concatenated_df.dot(concatenated_df.T)
+        return co_occurrence_matrix

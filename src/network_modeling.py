@@ -2,9 +2,15 @@
 Given a co-occurence matrix, returns the adjacency matrix
 """
 
-import numpy
+import numpy as np
 
-def normalized_counts(cooc_matrix):
+def _cluster_data_to_cooccurrence(concatenated_df):
+    co_occurrence_matrix = concatenated_df.dot(concatenated_df.T)
+    co_occurrence_matrix = np.array(co_occurrence_matrix, dtype=float)
+    return co_occurrence_matrix
+
+
+def normalized_counts(cluster_data):
     """
     Normalize each row of the co-occurrence matrix so that it sums to 1.
 
@@ -14,7 +20,8 @@ def normalized_counts(cooc_matrix):
     Returns:
         np.ndarray: NxN adjacency matrix with row-normalized values.
     """
-    cooc_matrix = np.array(cooc_matrix, dtype=float)
+    cooc_matrix = _cluster_data_to_cooccurrence(cluster_data)
+    
     row_sums = cooc_matrix.sum(axis=1, keepdims=True)
     # Avoid division by zero
     row_sums[row_sums == 0] = 1
@@ -35,3 +42,5 @@ def all_modeling_methods(verbose=0):
 
     if verbose: print('experimenting with:\n',[m.__name__ for m in modelings_methods])
     return modelings_methods
+
+
