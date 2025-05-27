@@ -346,6 +346,9 @@ class EntityAdjacencyMatrixMethods:
                 start = time.time()
                 print(f"creating adjacency matrix with {method_name}",end=' ')
                 adj_matrix = self.get_adjacency_matrix(method_name, normalize=normalize)
+
+                adj_matrix = (adj_matrix.subtract(adj_matrix.min(axis=1), axis=0).divide(adj_matrix.max(axis=1) - adj_matrix.min(axis=1), axis=0))
+
                 results[method_name] = adj_matrix
                 end = time.time()
                 print(f'{round(end-start,2)} seconds')
