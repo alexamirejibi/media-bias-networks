@@ -1,13 +1,8 @@
 import pandas as pd
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
-from sklearn.decomposition import NMF, TruncatedSVD, LatentDirichletAllocation
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.manifold import MDS
-from scipy.spatial.distance import pdist, squareform
-from scipy.stats import pearsonr
-import networkx as nx
-from node2vec import Node2Vec
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -18,7 +13,12 @@ class EntityAdjacencyMatrixMethods:
     Output: Square adjacency matrices (entity × entity) showing relationships.
     """
     
-    def __init__(self, cluster_df):
+    def __init__(self):
+        self.df = None
+        self.entities = None
+        self.n_entities = None
+
+    def set_data(self, cluster_df):
         self.df = cluster_df.astype(int)  # entities × sets
         self.entities = cluster_df.index.tolist()
         self.n_entities = len(self.entities)
