@@ -25,6 +25,9 @@ class Framework():
                 lambda: defaultdict(dict)
             )
         )
+        
+        # Store adjacency matrices for each sample and modeling method
+        self.adjacencies = defaultdict(dict)
 
 
     # TODO Sort files by date?
@@ -51,6 +54,9 @@ class Framework():
         network_models = EntityAdjacencyMatrixMethods()
         network_models.set_data(sample)
         adj_matrices = network_models.all_modeling_methods()
+        
+        # Store adjacency matrices
+        self.adjacencies[sample_ID] = adj_matrices
         
         for network_method, adj_matrix in adj_matrices.items():
             self.comm_detection(sample_ID,adj_matrix,network_method)

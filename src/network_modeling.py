@@ -314,7 +314,7 @@ class EntityAdjacencyMatrixMethods:
             
         return adj_matrix
     
-    def all_modeling_methods(self, normalize=False):
+    def all_modeling_methods(self, normalize=True):
         """
         Generate all adjacency matrices.
         
@@ -347,7 +347,7 @@ class EntityAdjacencyMatrixMethods:
                 print(f"creating adjacency matrix with {method_name}",end=' ')
                 adj_matrix = self.get_adjacency_matrix(method_name, normalize=normalize)
 
-                adj_matrix = (adj_matrix.subtract(adj_matrix.min(axis=1), axis=0).divide(adj_matrix.max(axis=1) - adj_matrix.min(axis=1), axis=0))
+                # adj_matrix = (adj_matrix.subtract(adj_matrix.min(axis=1), axis=0).divide(adj_matrix.max(axis=1) - adj_matrix.min(axis=1), axis=0))
 
                 results[method_name] = adj_matrix
                 end = time.time()
