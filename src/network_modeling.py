@@ -3,14 +3,21 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
+from scipy.sparse import csr_matrix
 import warnings
 warnings.filterwarnings('ignore')
 
 class EntityAdjacencyMatrixMethods:
     """
-    Methods for creating square adjacency matrices between entities from set-based data.
+    Optimized methods for creating square adjacency matrices between entities from set-based data.
     Input: DataFrame where rows are entities, columns are sets, values are binary (0/1).
     Output: Square adjacency matrices (entity × entity) showing relationships.
+    
+    All methods have been optimized using:
+    - Vectorized NumPy operations instead of nested loops
+    - Proper handling of division by zero with np.errstate
+    - Sparse matrix operations for memory efficiency
+    - Existing optimized libraries (sklearn, scipy)
     """
     
     def __init__(self):
@@ -34,40 +41,49 @@ class EntityAdjacencyMatrixMethods:
     
     def method_2_jaccard_similarity(self):
         """
-        Jaccard similarity between entities.
+        Jaccard similarity between entities (optimized vectorized version).
         A[i,j] = |sets(i) ∩ sets(j)| / |sets(i) ∪ sets(j)|
         """
-        adjacency = np.zeros((self.n_entities, self.n_entities))
+        # Convert to numpy array for faster operations
+        data = self.df.values.astype(bool)
         
-        for i in range(self.n_entities):
-            for j in range(i+1, self.n_entities):
-                sets_i = set(self.df.iloc[i][self.df.iloc[i] == 1].index)
-                sets_j = set(self.df.iloc[j][self.df.iloc[j] == 1].index)
-                
-                union_size = len(sets_i.union(sets_j))
-                if union_size > 0:
-                    jaccard = len(sets_i.intersection(sets_j)) / union_size
-                    adjacency[i, j] = jaccard
-                    adjacency[j, i] = jaccard
+        # Compute intersection: element-wise AND then sum
+        intersection = np.dot(data, data.T)
+        
+        # Compute union sizes: |A| + |B| - |A ∩ B|
+        row_sums = data.sum(axis=1)
+        union = row_sums[:, np.newaxis] + row_sums[np.newaxis, :] - intersection
+        
+        # Avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            adjacency = np.divide(intersection, union, out=np.zeros_like(intersection, dtype=float), where=union!=0)
+        
+        # Remove self-connections
+        np.fill_diagonal(adjacency, 0)
         
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
     def method_3_dice_coefficient(self):
         """
-        Dice coefficient between entities.
+        Dice coefficient between entities (optimized vectorized version).
         A[i,j] = 2 * |sets(i) ∩ sets(j)| / (|sets(i)| + |sets(j)|)
         """
-        adjacency = np.zeros((self.n_entities, self.n_entities))
+        # Convert to numpy array for faster operations
+        data = self.df.values.astype(bool)
         
-        for i in range(self.n_entities):
-            for j in range(i+1, self.n_entities):
-                sets_i = set(self.df.iloc[i][self.df.iloc[i] == 1].index)
-                sets_j = set(self.df.iloc[j][self.df.iloc[j] == 1].index)
-                
-                if len(sets_i) + len(sets_j) > 0:
-                    dice = 2 * len(sets_i.intersection(sets_j)) / (len(sets_i) + len(sets_j))
-                    adjacency[i, j] = dice
-                    adjacency[j, i] = dice
+        # Compute intersection: element-wise AND then sum
+        intersection = np.dot(data, data.T)
+        
+        # Compute sum of set sizes: |A| + |B|
+        row_sums = data.sum(axis=1)
+        sum_sizes = row_sums[:, np.newaxis] + row_sums[np.newaxis, :]
+        
+        # Avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            adjacency = np.divide(2 * intersection, sum_sizes, out=np.zeros_like(intersection, dtype=float), where=sum_sizes!=0)
+        
+        # Remove self-connections
+        np.fill_diagonal(adjacency, 0)
         
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
@@ -107,68 +123,88 @@ class EntityAdjacencyMatrixMethods:
     
     def method_6_pmi_matrix(self):
         """
-        Pointwise Mutual Information between entities.
+        Pointwise Mutual Information between entities (optimized vectorized version).
         A[i,j] = log(P(i,j) / (P(i) * P(j)))
         """
         n_sets = self.df.shape[1]  # number of sets
-        adjacency = np.zeros((self.n_entities, self.n_entities))
+        data = self.df.values.astype(bool)
         
-        # calculate probabilities - how often each entity appears
-        entity_probs = self.df.sum(axis=1) / n_sets  # P(entity)
+        # Calculate probabilities - how often each entity appears
+        entity_probs = data.sum(axis=1) / n_sets  # P(entity)
         
-        for i in range(self.n_entities):
-            for j in range(i+1, self.n_entities):
-                # p(entity_i, entity_j) = co-occurrence probability
-                cooccur_count = (self.df.iloc[i] * self.df.iloc[j]).sum()
-                joint_prob = cooccur_count / n_sets
-                
-                if joint_prob > 0 and entity_probs.iloc[i] > 0 and entity_probs.iloc[j] > 0:
-                    pmi = np.log(joint_prob / (entity_probs.iloc[i] * entity_probs.iloc[j]))
-                    adjacency[i, j] = max(0, pmi)  # use positive PMI
-                    adjacency[j, i] = adjacency[i, j]
+        # Compute co-occurrence counts (intersection)
+        cooccur_counts = np.dot(data, data.T)
+        joint_probs = cooccur_counts / n_sets
+        
+        # Compute expected probabilities: P(i) * P(j)
+        expected_probs = np.outer(entity_probs, entity_probs)
+        
+        # Compute PMI with proper handling of zeros
+        with np.errstate(divide='ignore', invalid='ignore'):
+            pmi = np.log(np.divide(joint_probs, expected_probs, 
+                                 out=np.zeros_like(joint_probs), 
+                                 where=(joint_probs > 0) & (expected_probs > 0)))
+        
+        # Use positive PMI and remove self-connections
+        adjacency = np.maximum(0, pmi)
+        np.fill_diagonal(adjacency, 0)
         
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
     def method_7_lift_matrix(self):
         """
-        Lift (association rule strength) between entities.
+        Lift (association rule strength) between entities (optimized vectorized version).
         A[i,j] = P(j|i) / P(j) = confidence / expected_confidence
         """
         n_sets = self.df.shape[1]
-        adjacency = np.zeros((self.n_entities, self.n_entities))
+        data = self.df.values.astype(bool)
         
-        entity_probs = self.df.sum(axis=1) / n_sets  # P(entity)
+        # Calculate entity probabilities
+        entity_probs = data.sum(axis=1) / n_sets  # P(entity)
+        entity_counts = data.sum(axis=1)  # count of sets each entity appears in
         
-        for i in range(self.n_entities):
-            for j in range(self.n_entities):
-                if i != j and entity_probs.iloc[j] > 0:
-                    # P(j|i) = P(i,j) / P(i)
-                    cooccur_count = (self.df.iloc[i] * self.df.iloc[j]).sum()
-                    entity_i_count = self.df.iloc[i].sum()
-                    
-                    if entity_i_count > 0:
-                        confidence = cooccur_count / entity_i_count
-                        lift = confidence / entity_probs.iloc[j]
-                        adjacency[i, j] = max(0, lift - 1)  # subtract 1 so independence = 0
+        # Compute co-occurrence counts
+        cooccur_counts = np.dot(data, data.T)
+        
+        # Compute confidence: P(j|i) = count(i,j) / count(i)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            confidence = np.divide(cooccur_counts, entity_counts[:, np.newaxis], 
+                                 out=np.zeros_like(cooccur_counts, dtype=float), 
+                                 where=entity_counts[:, np.newaxis] > 0)
+        
+        # Compute lift: confidence / P(j)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            lift = np.divide(confidence, entity_probs[np.newaxis, :], 
+                           out=np.zeros_like(confidence), 
+                           where=entity_probs[np.newaxis, :] > 0)
+        
+        # Subtract 1 so independence = 0, and ensure non-negative
+        adjacency = np.maximum(0, lift - 1)
+        np.fill_diagonal(adjacency, 0)
         
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
     def method_8_tfidf_similarity(self):
         """
-        TF-IDF based similarity between entities.
+        TF-IDF based similarity between entities (optimized version).
         Treats each entity as a 'document' of sets it appears in.
         """
-        # create documents for each entity (sets they appear in)
-        entity_documents = []
-        for entity in self.entities:
-            sets_with_entity = self.df[self.df[entity] == 1].index.astype(str)
-            entity_documents.append(' '.join(sets_with_entity))
+        # Create documents for each entity more efficiently
+        data = self.df.values.astype(bool)
+        set_names = self.df.columns.astype(str)
         
-        # compute TF-IDF
+        entity_documents = []
+        for i in range(len(self.entities)):
+            # Get indices where entity appears
+            set_indices = np.where(data[i])[0]
+            # Convert to set names and join
+            entity_documents.append(' '.join(set_names[set_indices]))
+        
+        # Compute TF-IDF
         vectorizer = TfidfVectorizer()
         tfidf_matrix = vectorizer.fit_transform(entity_documents)
         
-        # compute cosine similarity
+        # Compute cosine similarity
         adjacency = cosine_similarity(tfidf_matrix)
         np.fill_diagonal(adjacency, 0)
         
@@ -176,18 +212,25 @@ class EntityAdjacencyMatrixMethods:
     
     def method_9_conditional_probability(self):
         """
-        Conditional probability matrix.
+        Conditional probability matrix (optimized vectorized version).
         A[i,j] = P(j|i) = P(entity j appears | entity i appears)
         """
-        adjacency = np.zeros((self.n_entities, self.n_entities))
+        data = self.df.values.astype(bool)
         
-        for i in range(self.n_entities):
-            for j in range(self.n_entities):
-                if i != j:
-                    entity_i_count = self.df.iloc[i].sum()
-                    if entity_i_count > 0:
-                        cooccur_count = (self.df.iloc[i] * self.df.iloc[j]).sum()
-                        adjacency[i, j] = cooccur_count / entity_i_count
+        # Compute co-occurrence counts
+        cooccur_counts = np.dot(data, data.T)
+        
+        # Compute entity counts (how many sets each entity appears in)
+        entity_counts = data.sum(axis=1)
+        
+        # Compute conditional probabilities: P(j|i) = count(i,j) / count(i)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            adjacency = np.divide(cooccur_counts, entity_counts[:, np.newaxis], 
+                                out=np.zeros_like(cooccur_counts, dtype=float), 
+                                where=entity_counts[:, np.newaxis] > 0)
+        
+        # Remove self-connections
+        np.fill_diagonal(adjacency, 0)
         
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
@@ -201,13 +244,30 @@ class EntityAdjacencyMatrixMethods:
         
         return adjacency
     
+    def method_11_sparse_cooccurrence(self):
+        """
+        Use sparse matrix operations for memory-efficient co-occurrence computation on large datasets.
+        """
+        # Convert to sparse matrix for memory efficiency
+        sparse_data = csr_matrix(self.df.values.astype(bool))
+        
+        # Compute co-occurrence using sparse matrix multiplication
+        cooccur_sparse = sparse_data.dot(sparse_data.T)
+        
+        # Convert back to dense for adjacency matrix
+        adjacency = cooccur_sparse.toarray().astype(float)
+        np.fill_diagonal(adjacency, 0)
+        
+        return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
+    
     def get_adjacency_matrix(self, method='cooccurrence', normalize=False, **kwargs):
         """
         Get adjacency matrix using specified method.
         
         Args:
             method: One of ['cooccurrence', 'jaccard', 'dice', 'cosine_nmf', 'cosine_svd', 
-                           'correlation', 'pmi', 'lift', 'tfidf', 'conditional', 'symmetric_conditional']
+                           'correlation', 'pmi', 'lift', 'tfidf', 'conditional', 'symmetric_conditional',
+                           'sparse_cooccurrence']
             normalize: If True, apply min-max normalization to the matrix.
             **kwargs: Additional arguments for specific methods
         
@@ -236,6 +296,8 @@ class EntityAdjacencyMatrixMethods:
             adj_matrix = self.method_9_conditional_probability()
         elif method == 'symmetric_conditional':
             adj_matrix = self.method_10_symmetric_conditional_prob()
+        elif method == 'sparse_cooccurrence':
+            adj_matrix = self.method_11_sparse_cooccurrence()
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -271,7 +333,8 @@ class EntityAdjacencyMatrixMethods:
             'lift': 'Association rule lift',
             'tfidf': 'TF-IDF cosine similarity',
             'conditional': 'Conditional probability P(j|i)',
-            'symmetric_conditional': 'Symmetric conditional probability'
+            'symmetric_conditional': 'Symmetric conditional probability',
+            'sparse_cooccurrence': 'Sparse matrix co-occurrence (memory efficient)'
         }
         
         results = {}
