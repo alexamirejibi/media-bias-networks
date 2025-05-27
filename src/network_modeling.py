@@ -6,6 +6,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 import warnings
 warnings.filterwarnings('ignore')
 
+import time
+
 class EntityAdjacencyMatrixMethods:
     """
     Methods for creating square adjacency matrices between entities from set-based data.
@@ -278,8 +280,12 @@ class EntityAdjacencyMatrixMethods:
         
         for method_name in methods:
             try:
+                start = time.time()
+                print(f"creating adjacency matrix with {method_name}",end=' ')
                 adj_matrix = self.get_adjacency_matrix(method_name, normalize=normalize)
                 results[method_name] = adj_matrix
+                end = time.time()
+                print(f'{round(end-start,2)} seconds')
             except Exception as e:
                 print(f"Error with {method_name}: {e}")
                 
