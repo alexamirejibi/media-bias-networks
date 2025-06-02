@@ -43,50 +43,87 @@ class EntityAdjacencyMatrixMethods:
     
     def method_2_jaccard_similarity(self):
         """
-        Jaccard similarity between entities (optimized vectorized version).
+        Jaccard similarity implementation with explicit set operations.
         A[i,j] = |sets(i) ∩ sets(j)| / |sets(i) ∪ sets(j)|
         """
-        # Convert to numpy array for faster operations
+        # Convert to boolean numpy array
         data = self.df.values.astype(bool)
+        n_entities = len(self.entities)
         
-        # Compute intersection: element-wise AND then sum
-        intersection = np.dot(data, data.T)
+        # Initialize adjacency matrix
+        adjacency = np.zeros((n_entities, n_entities), dtype=float)
         
-        # Compute union sizes: |A| + |B| - |A ∩ B|
-        row_sums = data.sum(axis=1)
-        union = row_sums[:, np.newaxis] + row_sums[np.newaxis, :] - intersection
+        # Compute pairwise Jaccard similarities
+        for i in range(n_entities):
+            for j in range(i + 1, n_entities):  # Only compute upper triangle
+                # Get boolean vectors for entities i and j
+                entity_i = data[i]
+                entity_j = data[j]
+                
+                # Compute intersection and union
+                intersection_count = np.sum(entity_i & entity_j)
+                union_count = np.sum(entity_i | entity_j)
+                
+                # Compute Jaccard similarity
+                if union_count > 0:
+                    jaccard_sim = intersection_count / union_count
+                    adjacency[i, j] = jaccard_sim
+                    adjacency[j, i] = jaccard_sim  # Make symmetric
         
-        # Avoid division by zero
-        with np.errstate(divide='ignore', invalid='ignore'):
-            adjacency = np.divide(intersection, union, out=np.zeros_like(intersection, dtype=float), where=union!=0)
+        # Debug: Check result statistics
+        non_zero_count = np.count_nonzero(adjacency)
+        # total_elements = adjacency.size - len(adjacency) if n_entities > 0 else 0 # exclude diagonal
+        total_elements = n_entities * (n_entities -1) # more robust way to get pairs
         
-        # Remove self-connections
-        np.fill_diagonal(adjacency, 0)
-        
+        if total_elements > 0:
+            sparsity = 1 - (non_zero_count / total_elements)
+            print(f"Jaccard matrix sparsity: {sparsity:.3f} ({non_zero_count}/{total_elements} non-zero)")
+        else:
+            print("Jaccard matrix: Not enough elements to calculate sparsity (or only 1 entity).")
+
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
     def method_3_dice_coefficient(self):
         """
-        Dice coefficient between entities (optimized vectorized version).
+        Dice coefficient between entities with explicit set operations.
         A[i,j] = 2 * |sets(i) ∩ sets(j)| / (|sets(i)| + |sets(j)|)
         """
-        # Convert to numpy array for faster operations
+        # Convert to boolean numpy array
         data = self.df.values.astype(bool)
+        n_entities = len(self.entities)
         
-        # Compute intersection: element-wise AND then sum
-        intersection = np.dot(data, data.T)
+        # Initialize adjacency matrix
+        adjacency = np.zeros((n_entities, n_entities), dtype=float)
         
-        # Compute sum of set sizes: |A| + |B|
-        row_sums = data.sum(axis=1)
-        sum_sizes = row_sums[:, np.newaxis] + row_sums[np.newaxis, :]
+        # Compute pairwise Dice coefficients
+        for i in range(n_entities):
+            for j in range(i + 1, n_entities):  # Only compute upper triangle
+                # Get boolean vectors for entities i and j
+                entity_i = data[i]
+                entity_j = data[j]
+                
+                # Compute intersection and individual set sizes
+                intersection_count = np.sum(entity_i & entity_j)
+                size_i = np.sum(entity_i)
+                size_j = np.sum(entity_j)
+                sum_sizes = size_i + size_j
+                
+                # Compute Dice coefficient
+                if sum_sizes > 0:
+                    dice_coeff = (2 * intersection_count) / sum_sizes
+                    adjacency[i, j] = dice_coeff
+                    adjacency[j, i] = dice_coeff  # Make symmetric
         
-        # Avoid division by zero
-        with np.errstate(divide='ignore', invalid='ignore'):
-            adjacency = np.divide(2 * intersection, sum_sizes, out=np.zeros_like(intersection, dtype=float), where=sum_sizes!=0)
+        # Debug: Check result statistics
+        non_zero_count = np.count_nonzero(adjacency)
+        total_elements = n_entities * (n_entities - 1)  # more robust way to get pairs
         
-        # Remove self-connections
-        np.fill_diagonal(adjacency, 0)
-        
+        if total_elements > 0:
+            sparsity = 1 - (non_zero_count / total_elements)
+            print(f"Dice matrix sparsity: {sparsity:.3f} ({non_zero_count}/{total_elements} non-zero)")
+        else:
+            print("Dice matrix: Not enough elements to calculate sparsity (or only 1 entity).")
+            
         return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
     
     def method_4_cosine_similarity_embeddings(self, method='nmf', n_components=10):
@@ -102,8 +139,10 @@ class EntityAdjacencyMatrixMethods:
         elif method == 'svd':
             svd = TruncatedSVD(n_components=n_components, random_state=42)
             embeddings = svd.fit_transform(self.df)  # entities × components
+        elif method == 'raw':
+            embeddings = self.df.values # entities × sets
         else:
-            raise ValueError("Method must be 'nmf' or 'svd'")
+            raise ValueError("Method must be 'nmf', 'svd', or 'raw'")
         
         # compute cosine similarity
         adjacency = cosine_similarity(embeddings)
@@ -245,31 +284,15 @@ class EntityAdjacencyMatrixMethods:
         adjacency = (cond_prob + cond_prob.T) / 2
         
         return adjacency
-    
-    def method_11_sparse_cooccurrence(self):
-        """
-        Use sparse matrix operations for memory-efficient co-occurrence computation on large datasets.
-        """
-        # Convert to sparse matrix for memory efficiency
-        sparse_data = csr_matrix(self.df.values.astype(bool))
         
-        # Compute co-occurrence using sparse matrix multiplication
-        cooccur_sparse = sparse_data.dot(sparse_data.T)
-        
-        # Convert back to dense for adjacency matrix
-        adjacency = cooccur_sparse.toarray().astype(float)
-        np.fill_diagonal(adjacency, 0)
-        
-        return pd.DataFrame(adjacency, index=self.entities, columns=self.entities)
-    
     def get_adjacency_matrix(self, method='cooccurrence', normalize=False, **kwargs):
         """
         Get adjacency matrix using specified method.
         
         Args:
             method: One of ['cooccurrence', 'jaccard', 'dice', 'cosine_nmf', 'cosine_svd', 
-                           'correlation', 'pmi', 'lift', 'tfidf', 'conditional', 'symmetric_conditional',
-                           'sparse_cooccurrence']
+                           'cosine_raw', 'correlation', 'pmi', 'lift', 'tfidf', 'conditional', 
+                           'symmetric_conditional', 'sparse_cooccurrence']
             normalize: If True, apply min-max normalization to the matrix.
             **kwargs: Additional arguments for specific methods
         
@@ -286,6 +309,8 @@ class EntityAdjacencyMatrixMethods:
             adj_matrix = self.method_4_cosine_similarity_embeddings('nmf', **kwargs)
         elif method == 'cosine_svd':
             adj_matrix = self.method_4_cosine_similarity_embeddings('svd', **kwargs)
+        elif method == 'cosine_raw':
+            adj_matrix = self.method_4_cosine_similarity_embeddings('raw', **kwargs)
         elif method == 'correlation':
             adj_matrix = self.method_5_correlation_matrix()
         elif method == 'pmi':
@@ -298,19 +323,36 @@ class EntityAdjacencyMatrixMethods:
             adj_matrix = self.method_9_conditional_probability()
         elif method == 'symmetric_conditional':
             adj_matrix = self.method_10_symmetric_conditional_prob()
-        elif method == 'sparse_cooccurrence':
-            adj_matrix = self.method_11_sparse_cooccurrence()
         else:
             raise ValueError(f"Unknown method: {method}")
 
         if normalize:
-            min_val = adj_matrix.values.min()
-            max_val = adj_matrix.values.max()
-            if max_val > min_val:  # avoid division by zero if all values are the same
-                adj_matrix = (adj_matrix - min_val) / (max_val - min_val)
-            elif max_val == min_val and max_val != 0: # if all values are same but not zero, normalize to 1
-                 adj_matrix = adj_matrix / max_val
-            # if all values are 0, it remains 0, which is fine.
+            # from sklearn.preprocessing import StandardScaler
+            from sklearn.preprocessing import MinMaxScaler
+            
+            # Get the shape and index/columns for reconstruction
+            original_shape = adj_matrix.shape
+            original_index = adj_matrix.index
+            original_columns = adj_matrix.columns
+            
+            # Flatten the matrix for StandardScaler
+            values_flat = adj_matrix.values.flatten().reshape(-1, 1)
+            
+            scaler = MinMaxScaler()
+            normalized_values = scaler.fit_transform(values_flat)
+
+            # multiply by 10
+            normalized_values = normalized_values * 10
+            
+            # Reshape back to original matrix shape
+            normalized_matrix = normalized_values.reshape(original_shape)
+            
+            # Shift everything up so the minimum value is 0
+            min_val = normalized_matrix.min()
+            normalized_matrix = normalized_matrix - min_val
+            
+            # Reconstruct DataFrame with original index and columns
+            adj_matrix = pd.DataFrame(normalized_matrix, index=original_index, columns=original_columns)
             
         return adj_matrix
     
@@ -326,10 +368,11 @@ class EntityAdjacencyMatrixMethods:
         """
         methods = {
             'cooccurrence': 'Direct co-occurrence counts',
-            'jaccard': 'Jaccard similarity coefficient', 
+            'jaccard': 'Jaccard similarity coefficient',
             'dice': 'Dice coefficient',
             'cosine_nmf': 'Cosine similarity of NMF embeddings',
             'cosine_svd': 'Cosine similarity of SVD embeddings',
+            'cosine_raw': 'Cosine similarity of raw embeddings',
             'correlation': 'Pearson correlation',
             'pmi': 'Positive Pointwise Mutual Information',
             'lift': 'Association rule lift',
