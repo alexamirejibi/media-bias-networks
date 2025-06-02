@@ -75,7 +75,7 @@ class Framework():
             for hpi,hp in enumerate(hp_sets):
                 # TODO What if there are no hyperparameters
                 hp_ID = f"{comm_method_name}_{hpi}"
-                communities = comm_method(adj_matrix)
+                communities = comm_method(adj_matrix,hp)
 
                 result = {
                     "hyperparameters":hp,

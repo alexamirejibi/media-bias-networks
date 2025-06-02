@@ -10,7 +10,7 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 
 
-def louvain(adj_mat):
+def louvain(adj_mat,parameters):
     """
     Detects communities using the Louvain algorithm.
 
@@ -24,8 +24,10 @@ def louvain(adj_mat):
     # G = nx.karate_club_graph()
     G = nx.from_numpy_array(adj_mat)
 
+    resolution = parameters['resolution']
+
     #first compute the best partition
-    partition = community_louvain.best_partition(G)
+    partition = community_louvain.best_partition(G,resolution=resolution)
 
     # TODO delete. This is from the docs example
     # # draw the graph
