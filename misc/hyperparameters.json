@@ -1,0 +1,19 @@
+{
+    "louvain": [
+        {"resolution":0.5},
+        {"resolution":1},
+        {"resolution":1.5}
+    ],
+    "leiden": [
+        {"num_iterations": 5}
+    ],
+    "infomap_community": [
+        {"dummy": 1}
+    ],
+    "label_propagation": [
+        {"dummy": 1}
+    ],
+    "girvan_newman": [
+        {"dummy": 1}
+    ]
+}

@@ -1,7 +1,0 @@
-{
-    "louvain": [
-        {"resolution":0.5},
-        {"resolution":1},
-        {"resolution":1.5}
-    ]
-}
