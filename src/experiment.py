@@ -135,12 +135,3 @@ class ExperimentFramework:
     def export_results(self, filepath: str = 'results/experiment_results.csv'):
         """export results to csv file"""
         self.analyzer.export_results(filepath)
-    
-    # def list_available_data(self) -> dict:
-    #     """list what data is available for analysis"""
-    #     return {
-    #         'samples': self.data.list_samples(),
-    #         'daily_data_info': self.data.get_daily_data_info(),
-    #         'results_summary': self.analyzer.summary(),
-    #         'available_adjacencies': list(self.analyzer.adjacencies.keys())
-    #     }

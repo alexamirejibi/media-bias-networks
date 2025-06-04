@@ -190,11 +190,11 @@ class Visualizer:
         above_threshold = frequencies[frequencies >= min_frequency]
         
         print(f"\nOutlet Co-clustering Analysis:")
-        print(f"• Outlets analyzed: {len(cooccurrence)}")
-        print(f"• Pairs above {min_frequency:.1%} threshold: {len(above_threshold)}")
+        print(f"Outlets analyzed: {len(cooccurrence)}")
+        print(f"Pairs above {min_frequency:.1%} threshold: {len(above_threshold)}")
         if len(above_threshold) > 0:
-            print(f"• Mean frequency: {above_threshold.mean():.3f}")
-            print(f"• Max frequency: {above_threshold.max():.3f}")
+            print(f"Mean frequency: {above_threshold.mean():.3f}")
+            print(f"Max frequency: {above_threshold.max():.3f}")
     
     def plot_stable_outlet_groups(self, frequency_threshold: float = 0.7, 
                                  min_group_size: int = 2, figsize: tuple = (12, 8)) -> None:
