@@ -112,6 +112,8 @@ class CommunityDetector:
         """detect communities with single method"""
         method_func = registry.get_community_method(method)
         adj_array = np.array(adj_matrix, dtype=float)
+        # replace nan values with 0
+        adj_array = np.nan_to_num(adj_array, nan=0.0, posinf=0.0, neginf=0.0)
         return method_func(adj_array, params)
     
     @staticmethod
