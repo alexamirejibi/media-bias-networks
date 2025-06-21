@@ -9,6 +9,8 @@ from .config import DEFAULT_SAMPLE_SIZE, DEFAULT_N_SAMPLES
 
 import time
 from typing import List, Optional
+import numpy as np
+import pandas as pd
 
 
 class ExperimentFramework:
@@ -135,3 +137,8 @@ class ExperimentFramework:
     def export_results(self, filepath: str = 'results/experiment_results.csv'):
         """export results to csv file"""
         self.analyzer.export_results(filepath)
+
+    def aggregate_results(self):
+        """aggregate results from all samples"""
+        return self.analyzer.aggregate_results_normalized()
+        

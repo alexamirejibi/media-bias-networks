@@ -111,14 +111,14 @@ class Visualizer:
             print(f"{i:2d}. {row['network_method']} + {row['community_method']}: "
                   f"{row['stability_score']:.3f}")
     
-    def plot_method_comparison(self, figsize: tuple = (14, 8)) -> None:
+    def plot_method_comparison(self, figsize: tuple = (12, 12)) -> None:
         """plot comprehensive method performance comparison"""
         performance = self.analyzer.compare_method_performance()
         
         if not self._check_data(performance, "no performance data available"):
             return
         
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
+        fig, axes = plt.subplots(2, 1, figsize=figsize)
         
         # communities heatmap
         performance_reset = performance.reset_index()
@@ -243,43 +243,195 @@ class Visualizer:
     
     # ===== SUMMARY VISUALIZATION =====
     
-    def plot_analysis_summary(self, figsize: tuple = (15, 10)) -> None:
+    def plot_modularity_analysis(self, figsize: tuple = (12, 16)) -> None:
+        """analyze modularity distributions and relationships"""
+        df = self.analyzer.get_results()
+        
+        if not self._check_data(df, "no results available for modularity analysis"):
+            return
+        
+        mod_data = df.dropna(subset=['modularity'])
+        if not self._check_data(mod_data, "no modularity data available"):
+            return
+        
+        fig, axes = plt.subplots(4, 1, figsize=figsize)
+        
+        # overall modularity distribution
+        mod_data['modularity'].hist(bins=30, alpha=0.7, color='skyblue', ax=axes[0])
+        axes[0].axvline(mod_data['modularity'].mean(), color='red', linestyle='--', 
+                         label=f'mean: {mod_data["modularity"].mean():.3f}')
+        axes[0].set_xlabel('modularity')
+        axes[0].set_ylabel('frequency')
+        axes[0].set_title('modularity distribution')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        # modularity vs communities scatter
+        scatter = axes[1].scatter(mod_data['n_communities'], mod_data['modularity'], 
+                                   alpha=0.6, c=mod_data['n_communities'], cmap='viridis')
+        axes[1].set_xlabel('number of communities (k)')
+        axes[1].set_ylabel('modularity')
+        axes[1].set_title('modularity vs k')
+        axes[1].grid(True, alpha=0.3)
+        plt.colorbar(scatter, ax=axes[1])
+        
+        # modularity by k (box plots)
+        k_values = sorted(mod_data['n_communities'].unique())
+        modularity_by_k = [mod_data[mod_data['n_communities'] == k]['modularity'].values for k in k_values]
+        bp = axes[2].boxplot(modularity_by_k, labels=k_values, patch_artist=True)
+        for patch in bp['boxes']:
+            patch.set_facecolor('lightblue')
+        axes[2].set_xlabel('number of communities (k)')
+        axes[2].set_ylabel('modularity')
+        axes[2].set_title('modularity by k')
+        axes[2].grid(True, alpha=0.3)
+        
+        # method combination heatmap
+        pivot_table = mod_data.pivot_table(values='modularity', index='network_method', 
+                                          columns='community_method', aggfunc='mean')
+        sns.heatmap(pivot_table, annot=True, fmt='.3f', cmap='viridis', ax=axes[3])
+        axes[3].set_title('mean modularity by method')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # print stats
+        self._print_stats(mod_data['modularity'].values, "modularity")
+        correlation = mod_data['n_communities'].corr(mod_data['modularity'])
+        print(f"k-modularity correlation: {correlation:.3f}")
+    
+    def plot_k_distribution_analysis(self, figsize: tuple = (12, 16)) -> None:
+        """analyze distribution of community counts across methods"""
+        df = self.analyzer.get_results()
+        
+        if not self._check_data(df, "no results available for k analysis"):
+            return
+        
+        fig, axes = plt.subplots(4, 1, figsize=figsize)
+        
+        # k distribution histogram
+        k_range = range(int(df['n_communities'].min()), int(df['n_communities'].max()) + 2)
+        axes[0].hist(df['n_communities'], bins=k_range, alpha=0.7, edgecolor='black')
+        axes[0].axvline(df['n_communities'].mean(), color='red', linestyle='--', 
+                         label=f'mean: {df["n_communities"].mean():.1f}')
+        axes[0].set_xlabel('number of communities (k)')
+        axes[0].set_ylabel('frequency')
+        axes[0].set_title('k distribution')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        # k by network method
+        network_methods = df['network_method'].unique()
+        k_by_network = [df[df['network_method'] == method]['n_communities'] for method in network_methods]
+        axes[1].boxplot(k_by_network, labels=network_methods)
+        axes[1].set_ylabel('number of communities (k)')
+        axes[1].set_title('k by network method')
+        axes[1].tick_params(axis='x', rotation=45)
+        axes[1].grid(True, alpha=0.3)
+        
+        # k swarmplot by community method (colored by network method)
+        sns.swarmplot(data=df, x='community_method', y='n_communities', 
+                     hue='network_method', ax=axes[2], size=4, alpha=0.7)
+        axes[2].set_ylabel('number of communities (k)')
+        axes[2].set_xlabel('community method')
+        axes[2].tick_params(axis='x', rotation=45)
+        axes[2].set_title('k by community method (swarmplot)')
+        axes[2].legend(title='network method', bbox_to_anchor=(1.05, 1), loc='upper left')
+        axes[2].grid(True, alpha=0.3)
+        
+        # k swarmplot by network method (colored by community method)
+        sns.swarmplot(data=df, x='network_method', y='n_communities', 
+                     hue='community_method', ax=axes[3], size=4, alpha=0.7)
+        axes[3].set_ylabel('number of communities (k)')
+        axes[3].set_xlabel('network method')
+        axes[3].tick_params(axis='x', rotation=45)
+        axes[3].set_title('k by network method (swarmplot)')
+        axes[3].legend(title='community method', bbox_to_anchor=(1.05, 1), loc='upper left')
+        axes[3].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # print stats
+        self._print_stats(df['n_communities'].values, "k values")
+        mode_k = df['n_communities'].mode().iloc[0]
+        print(f"most common k: {mode_k} ({(df['n_communities'] == mode_k).sum()} occurrences)")
+    
+    def plot_k_modularity_relationship(self, figsize: tuple = (12, 8)) -> None:
+        """analyze relationship between k and modularity across methods"""
+        df = self.analyzer.get_results()
+        mod_data = df.dropna(subset=['modularity'])
+        
+        if not self._check_data(mod_data, "no modularity data for k-modularity analysis"):
+            return
+        
+        fig, axes = plt.subplots(2, 1, figsize=figsize)
+        
+        # k vs modularity by community method
+        community_methods = mod_data['community_method'].unique()
+        for method in community_methods:
+            method_data = mod_data[mod_data['community_method'] == method]
+            axes[0].scatter(method_data['n_communities'], method_data['modularity'], 
+                             alpha=0.7, label=method, s=30)
+        axes[0].set_xlabel('number of communities (k)')
+        axes[0].set_ylabel('modularity')
+        axes[0].set_title('k vs modularity by community method')
+        axes[0].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        axes[0].grid(True, alpha=0.3)
+        
+        # modularity boxplot by k
+        k_values = sorted(mod_data['n_communities'].unique())
+        modularity_by_k = [mod_data[mod_data['n_communities'] == k]['modularity'].values for k in k_values]
+        axes[1].boxplot(modularity_by_k, labels=k_values)
+        axes[1].set_xlabel('number of communities (k)')
+        axes[1].set_ylabel('modularity')
+        axes[1].set_title('modularity distribution by k')
+        axes[1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # print correlation statistics
+        correlation = mod_data['n_communities'].corr(mod_data['modularity'])
+        print(f"\nk-modularity correlation: {correlation:.3f}")
+    
+    def plot_analysis_summary(self, figsize: tuple = (12, 16)) -> None:
         """comprehensive summary plot combining all core analyses"""
         if not self._check_data(self.analyzer.results_df, "no results to visualize"):
             return
         
-        fig, axes = plt.subplots(2, 2, figsize=figsize)
+        fig, axes = plt.subplots(4, 1, figsize=figsize)
         
         # method performance
         performance = self.analyzer.compare_method_performance()
         if not performance.empty:
-            performance['avg_communities'].head(10).plot(kind='bar', ax=axes[0,0], 
+            performance['avg_communities'].head(10).plot(kind='bar', ax=axes[0], 
                                                         color='lightblue', alpha=0.8)
-            axes[0,0].set_title('Top 10 Methods by Communities Found')
-            axes[0,0].set_ylabel('Average Communities')
-            axes[0,0].tick_params(axis='x', rotation=45)
+            axes[0].set_title('Top 10 Methods by Communities Found')
+            axes[0].set_ylabel('Average Communities')
+            axes[0].tick_params(axis='x', rotation=45)
         
         # stability ranking
         stability = self.analyzer.analyze_stability()
         if not stability.empty:
-            stability.head(10)['stability_score'].plot(kind='bar', ax=axes[0,1], 
+            stability.head(10)['stability_score'].plot(kind='bar', ax=axes[1], 
                                                       color='lightgreen', alpha=0.8)
-            axes[0,1].set_title('Top 10 Most Stable Methods')
-            axes[0,1].set_ylabel('Stability Score')
-            axes[0,1].tick_params(axis='x', rotation=45)
+            axes[1].set_title('Top 10 Most Stable Methods')
+            axes[1].set_ylabel('Stability Score')
+            axes[1].tick_params(axis='x', rotation=45)
         
         # dataset comparison
         datasets = self.analyzer.results_df.get('dataset', pd.Series()).unique()
         if len(datasets) > 1:
             dataset_summary = self.analyzer.results_df.groupby('dataset')['n_communities'].mean()
-            dataset_summary.plot(kind='bar', ax=axes[1,0], color='orange', alpha=0.8)
-            axes[1,0].set_title('Average Communities by Dataset')
-            axes[1,0].set_ylabel('Average Communities')
-            axes[1,0].tick_params(axis='x', rotation=0)
+            dataset_summary.plot(kind='bar', ax=axes[2], color='orange', alpha=0.8)
+            axes[2].set_title('Average Communities by Dataset')
+            axes[2].set_ylabel('Average Communities')
+            axes[2].tick_params(axis='x', rotation=0)
         else:
-            axes[1,0].text(0.5, 0.5, 'Single Dataset\nAnalysis', 
-                          ha='center', va='center', transform=axes[1,0].transAxes, fontsize=14)
-            axes[1,0].set_title('Dataset Analysis')
+            axes[2].text(0.5, 0.5, 'Single Dataset\nAnalysis', 
+                          ha='center', va='center', transform=axes[2].transAxes, fontsize=14)
+            axes[2].set_title('Dataset Analysis')
         
         # outlet clustering summary
         cooccurrence = self.analyzer.outlet_clustering_frequency(min_frequency=0.3)
@@ -287,14 +439,14 @@ class Visualizer:
             frequencies = cooccurrence.values[np.triu_indices_from(cooccurrence.values, k=1)]
             frequencies = frequencies[frequencies > 0]
             
-            axes[1,1].hist(frequencies, bins=20, alpha=0.7, color='purple', edgecolor='black')
-            axes[1,1].set_title('Distribution of Outlet Co-clustering')
-            axes[1,1].set_xlabel('Co-clustering Frequency')
-            axes[1,1].set_ylabel('Number of Outlet Pairs')
+            axes[3].hist(frequencies, bins=20, alpha=0.7, color='purple', edgecolor='black')
+            axes[3].set_title('Distribution of Outlet Co-clustering')
+            axes[3].set_xlabel('Co-clustering Frequency')
+            axes[3].set_ylabel('Number of Outlet Pairs')
         else:
-            axes[1,1].text(0.5, 0.5, 'No Outlet\nData Available', 
-                          ha='center', va='center', transform=axes[1,1].transAxes)
-            axes[1,1].set_title('Outlet Analysis')
+            axes[3].text(0.5, 0.5, 'No Outlet\nData Available', 
+                          ha='center', va='center', transform=axes[3].transAxes)
+            axes[3].set_title('Outlet Analysis')
         
         plt.tight_layout()
         plt.show()

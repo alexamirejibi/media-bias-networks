@@ -264,7 +264,7 @@ def louvain_communities(adj_matrix: np.ndarray, params: Dict) -> Dict[int, int]:
 @community_method('leiden', [
     {'objective_function': 'modularity'}
 ] + generate_param_combinations(
-    resolution=[0.01, 0.05, 0.1, 0.2],
+    resolution=[0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
     objective_function=['CPM']
 ))
 def leiden_communities(adj_matrix: np.ndarray, params: Dict) -> Dict[int, int]:
@@ -337,7 +337,7 @@ def girvan_newman_communities(adj_matrix: np.ndarray, params: Dict) -> Dict[int,
 
 
 @community_method('infomap', generate_param_combinations(
-    num_trials=[1, 5, 10],
+    num_trials=[10, 25, 50],
     two_level=[False, True]
 ))
 def infomap_communities(adj_matrix: np.ndarray, params: Dict) -> Dict[int, int]:
@@ -408,15 +408,15 @@ def infomap_communities(adj_matrix: np.ndarray, params: Dict) -> Dict[int, int]:
 
 
 @community_method('spectral_clustering', generate_param_combinations(
-    n_clusters=[2, 3, 4, 5, 6, 8],
+    n_clusters=[2, 3, 4, 5, 6, 8, 10, 12],
     eigen_solver=['arpack'],
     assign_labels=['kmeans']
 ) + generate_param_combinations(
-    n_clusters=[3, 5, 8],
+    n_clusters=[3, 5, 8, 10],
     eigen_solver=['lobpcg'],
     assign_labels=['kmeans']
 ) + generate_param_combinations(
-    n_clusters=[3, 5, 8],
+    n_clusters=[3, 5, 8, 10],
     eigen_solver=['arpack'],
     assign_labels=['discretize']
 ))
@@ -440,7 +440,7 @@ def spectral_clustering_communities(adj_matrix: np.ndarray, params: Dict) -> Dic
     return {i: int(label) for i, label in enumerate(cluster_labels)}
 
 
-@community_method('threshold_components', single_param_range('threshold', [0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]))
+@community_method('threshold_components', single_param_range('threshold', [0.05, 0.1, 0.2, 0.3, 0.5]))
 def threshold_based_communities(adj_matrix: np.ndarray, params: Dict) -> Dict[int, int]:
     """threshold-based connected components"""
     import networkx as nx
