@@ -96,13 +96,18 @@ sns.set_palette(CATEGORICAL_COLORS)
 
 print("=== MEDIA BIAS NETWORK ANALYSIS ===")
 
-# experiment parameters
+# experiment parameters (temporal sampling)
 data_dir = 'data/daily_cluster_matrices_min_6'
-n_samples = 20
-n_days = 60
-results_file = f'results/experiment_results_{n_samples}samples_{n_days}days.pkl'
+# consecutive window configuration
+window_size = 30  # days per window
+step_size = 30    # non-overlapping windows; set < window_size for sliding windows
 
-# check if results already exist
+results_file = f'results/temporal_experiment_{window_size}win_{step_size}step.pkl'
+
+# -----------------------------------------------------------------------------
+# 1A. LOAD EXISTING TEMPORAL EXPERIMENT RESULTS IF AVAILABLE
+# -----------------------------------------------------------------------------
+
 if os.path.exists(results_file):
     print(f"Loading existing results from {results_file}...")
     
@@ -110,10 +115,8 @@ if os.path.exists(results_file):
     with open(results_file, 'rb') as f:
         saved_data = pickle.load(f)
     
-    # extract components
-    experiment = saved_data['experiment']
-    experiment_summary = saved_data['experiment_summary']
-    analyzer = experiment.analyzer
+    temporal_summary = saved_data['experiment_summary']  # kept key name for backward compat
+    analyzer = saved_data['experiment'].analyzer
     viz = Visualizer(analyzer)
     
     print(f"Loaded experiment results:")
@@ -121,44 +124,82 @@ if os.path.exists(results_file):
     print(f"Network methods: {len(analyzer.get_results()['network_method'].unique())}")
     print(f"Community methods: {len(analyzer.get_results()['community_method'].unique())}")
     
-else:
-    print("No existing results found. Running new experiment...")
-    print("Initializing experiment framework...")
-    
-    # initialize experiment
-    experiment = ExperimentFramework(data_dir)
-    
-    # run experiment with more samples for robust analysis
-    print(f"Running experiment: {n_samples} samples × {n_days} days")
-    experiment_summary = experiment.run_experiment(n_samples=n_samples, n_days=n_days)
-    
-    analyzer = experiment.analyzer
-    viz = Visualizer(analyzer)
-    
-    print(f"\nEXPERIMENT SUMMARY:")
-    print(f"Total results: {experiment_summary['total_results']}")
+    # show brief summary (already computed when results were generated originally)
+    print(f"\nTEMPORAL EXPERIMENT SUMMARY (loaded):")
+    print(f"Windows processed: {temporal_summary['n_windows']} (size={window_size}, step={step_size})")
+    print(f"Total results: {len(analyzer.get_results())}")
     print(f"Network methods: {len(analyzer.get_results()['network_method'].unique())}")
     print(f"Community methods: {len(analyzer.get_results()['community_method'].unique())}")
-    print(f"Average time per sample: {experiment_summary['avg_time_per_sample']:.1f}s")
-    
+    print(f"Average time per window: {temporal_summary['total_time']/max(temporal_summary['n_windows'],1):.1f}s")
+
+else:
+    print("No existing results found. Running temporal experiment...")
+    print("Initializing experiment framework...")
+
+    experiment = ExperimentFramework(data_dir)
+
+    temporal_summary = experiment.run_temporal_experiment(window_size=window_size, step=step_size)
+
+    analyzer = experiment.analyzer
+    viz = Visualizer(analyzer)
+
+    print(f"\nTEMPORAL EXPERIMENT SUMMARY:")
+    print(f"Windows processed: {temporal_summary['n_windows']} (size={window_size}, step={step_size})")
+    print(f"Total results: {len(analyzer.get_results())}")
+    print(f"Network methods: {len(analyzer.get_results()['network_method'].unique())}")
+    print(f"Community methods: {len(analyzer.get_results()['community_method'].unique())}")
+    print(f"Average time per window: {temporal_summary['total_time']/temporal_summary['n_windows']:.1f}s")
+
     # save results
     print(f"\nSaving results to {results_file}...")
     os.makedirs('results', exist_ok=True)
-    
-    # create data to save
+
     save_data = {
         'experiment': experiment,
-        'experiment_summary': experiment_summary,
-        'n_samples': n_samples,
-        'n_days': n_days,
+        'experiment_summary': temporal_summary,
+        'window_size': window_size,
+        'step_size': step_size,
         'data_dir': data_dir
     }
-    
+
     with open(results_file, 'wb') as f:
         pickle.dump(save_data, f)
-    
-    print(f"Results saved successfully!")
 
+    print("Results saved successfully!")
+
+# %%
+
+# =============================================================================
+# 1.2. TEMPORAL ROBUSTNESS ANALYSIS (stability across windows)
+# =============================================================================
+
+print("\n=== TEMPORAL ROBUSTNESS ANALYSIS ===")
+
+window_ids = [ws['window_id'] for ws in temporal_summary['window_summaries']]
+
+# compute stability matrix (ARI between window clusterings)
+stability_df = analyzer.temporal_stability(window_ids, metric='ari')
+
+if not stability_df.empty:
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(stability_df, annot=True, fmt='.2f', cmap=DIVERGING_CMAP, square=True,
+                cbar_kws={'label': 'Adjusted Rand Index'})
+    plt.title(f'Temporal Stability between {window_size}-Day Windows\n(metric: ARI)', fontweight='bold')
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    os.makedirs('results', exist_ok=True)
+    plt.savefig('results/temporal_stability_ari.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print("\nTemporal stability (ARI) summary:")
+    off_diag = stability_df.values[~np.eye(len(stability_df), dtype=bool)]
+    print(f"  Mean ARI: {off_diag.mean():.3f}")
+    print(f"  Std  ARI: {off_diag.std():.3f}")
+    print(f"  Min  ARI: {off_diag.min():.3f}")
+    print(f"  Max  ARI: {off_diag.max():.3f}")
+else:
+    print("Stability matrix could not be computed (insufficient data)")
 
 # %%
 

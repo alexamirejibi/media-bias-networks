@@ -141,4 +141,65 @@ class ExperimentFramework:
     def aggregate_results(self):
         """aggregate results from all samples"""
         return self.analyzer.aggregate_results_normalized()
+    
+    def run_temporal_experiment(self, window_size: int = 30, step: int = 30) -> dict:
+        """run pipeline on consecutive (or sliding) windows of daily data
+
+        parameters
+        ----------
+        window_size : int
+            number of consecutive days per window
+        step : int
+            number of days to move the window start each iteration. step == window_size → non-overlapping windows
+        returns
+        -------
+        dict
+            summary containing one entry per window
+        """
+        total_days = self.data.get_daily_data_info()['n_files']
+        if window_size > total_days:
+            raise ValueError("window_size exceeds total available days")
+
+        # determine window start indices
+        starts = list(range(0, total_days - window_size + 1, step))
+        print(f"\n=== starting temporal experiment: {len(starts)} windows of {window_size} days (step={step}) ===")
+
+        experiment_start = time.time()
+        window_summaries = []
+
+        for w_idx, start_day in enumerate(starts):
+            window_id = f"win_{w_idx:02d}"
+            # build sample via deterministic window
+            sample_df = self.data.create_window(window_id, start_day, window_size)
+
+            # pipeline identical to run_sample but with deterministic data
+            self.networks.set_data(sample_df)
+            adjacencies = self.networks.build_all()
+
+            for network_method, adj_matrix in adjacencies.items():
+                community_results = self.communities.detect_all(adj_matrix)
+                self.analyzer.add_sample_results(
+                    sample_id=window_id,
+                    network_method=network_method,
+                    community_results=community_results,
+                    adjacency_matrix=adj_matrix
+                )
+
+            window_summaries.append({
+                'window_id': window_id,
+                'start_day_index': start_day,
+                'end_day_index': start_day + window_size - 1,
+                'n_results_cumulative': len(self.analyzer.results_df)
+            })
+
+        total_time = time.time() - experiment_start
+        print(f"\n=== temporal experiment completed in {total_time:.1f}s ===")
+
+        return {
+            'n_windows': len(starts),
+            'window_size': window_size,
+            'step': step,
+            'total_time': total_time,
+            'window_summaries': window_summaries
+        }
         

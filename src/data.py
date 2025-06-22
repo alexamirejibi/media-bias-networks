@@ -38,6 +38,39 @@ class DataManager:
         
         print(f"loaded {len(self.daily_data)} datasets")
     
+    def _sorted_files(self):
+        """return daily matrix filenames sorted chronologically (by filename)"""
+        return sorted(self.daily_data.keys())
+
+    def create_window(self, window_id: str, start_day: int, window_size: int = 30) -> pd.DataFrame:
+        """create a sample composed of `window_size` consecutive days starting at `start_day` (0-based)
+
+        parameters
+        ----------
+        window_id : str
+            identifier used as sample_id downstream
+        start_day : int
+            index in chronologically-sorted daily file list denoting the first day of the window
+        window_size : int
+            number of consecutive daily matrices to include
+        """
+        if window_id in self.samples:
+            return self.samples[window_id]
+
+        files = self._sorted_files()
+        n_files = len(files)
+        if start_day < 0 or start_day + window_size > n_files:
+            raise ValueError("requested window exceeds available date range")
+
+        slice_files = files[start_day:start_day + window_size]
+        dfs = [self.daily_data[f] for f in slice_files]
+        window_df = pd.concat(dfs, axis=1).fillna(0).astype(int)
+
+        self.samples[window_id] = window_df
+        print(f"created window '{window_id}' with {window_size} days (" \
+              f"{slice_files[0]} → {slice_files[-1]}), shape: {window_df.shape}")
+        return window_df
+    
     def create_sample(self, sample_id: str, n_days: int = 5) -> pd.DataFrame:
         """create a sample by concatenating random daily matrices"""
         if sample_id in self.samples:
