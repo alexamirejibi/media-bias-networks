@@ -24,6 +24,8 @@ warnings.filterwarnings('ignore')
 
 from src.experiment import ExperimentFramework
 from src.viz import Visualizer
+# Note: The analysis module has been refactored into specialized components while maintaining backward compatibility
+# All existing method calls will continue to work unchanged
 
 # =============================================================================
 # CONSISTENT COLOR PALETTE SETUP
@@ -119,6 +121,12 @@ if os.path.exists(results_file):
     analyzer = saved_data['experiment'].analyzer
     viz = Visualizer(analyzer)
     
+    # NEW: Access to specialized analyzers (optional - existing code continues to work)
+    # analyzer.stability_analyzer    # For stability and robustness analysis
+    # analyzer.statistics_analyzer   # For significance testing and null distributions 
+    # analyzer.clustering_analyzer   # For hierarchical clustering and consensus building
+    # analyzer.temporal_analyzer     # For time-series and drift analysis
+    
     print(f"Loaded experiment results:")
     print(f"Total results: {len(analyzer.get_results())}")
     print(f"Network methods: {len(analyzer.get_results()['network_method'].unique())}")
@@ -142,6 +150,12 @@ else:
 
     analyzer = experiment.analyzer
     viz = Visualizer(analyzer)
+    
+    # NEW: Access to specialized analyzers (optional - existing code continues to work)
+    # analyzer.stability_analyzer    # For stability and robustness analysis
+    # analyzer.statistics_analyzer   # For significance testing and null distributions 
+    # analyzer.clustering_analyzer   # For hierarchical clustering and consensus building
+    # analyzer.temporal_analyzer     # For time-series and drift analysis
 
     print(f"\nTEMPORAL EXPERIMENT SUMMARY:")
     print(f"Windows processed: {temporal_summary['n_windows']} (size={window_size}, step={step_size})")
