@@ -705,17 +705,16 @@ class ResultsAnalyzer:
         linkage_weighted = linkage(squareform(dist_weighted, checks=False), method='ward')
         linkage_raw = linkage(squareform(dist_raw, checks=False), method='ward')
         
-        # get ordering from linkage trees
-        order_weighted = leaves_list(linkage_weighted)
+        # use the ordering from the raw (unweighted) linkage for consistent sorting across matrices
         order_raw = leaves_list(linkage_raw)
         
         # calculate difference before sorting
         diff_matrix = norm_weighted - norm_raw
         
-        # sort matrices by linkage tree ordering
-        sorted_norm_weighted = norm_weighted.iloc[order_weighted, order_weighted]
+        # sort matrices consistently using the raw ordering
         sorted_norm_raw = norm_raw.iloc[order_raw, order_raw]
-        sorted_diff_matrix = diff_matrix.iloc[order_weighted, order_weighted]
+        sorted_norm_weighted = norm_weighted.iloc[order_raw, order_raw]
+        sorted_diff_matrix = diff_matrix.iloc[order_raw, order_raw]
         
         # create heatmap visualizations (separate figures)
         heatmap_cmap = LinearSegmentedColormap.from_list('custom_heatmap',
@@ -749,7 +748,7 @@ class ResultsAnalyzer:
                         abs(sorted_diff_matrix.values[off_diag_mask].max()))
         sns.heatmap(sorted_diff_matrix, cmap=diverging_cmap, center=0, vmin=-vmax_diff, vmax=vmax_diff,
                     square=True, cbar_kws={'shrink': 0.8})
-        plt.title('Difference (Weighted - Raw)\n(sorted by weighted linkage)', fontweight='bold')
+        plt.title('Difference (Weighted - Raw)\n(sorted by raw linkage)', fontweight='bold')
         plt.tick_params(axis='both', labelsize=6)
         plt.tight_layout()
         plt.savefig('results/surprisal_weighting_difference_heatmap.png', dpi=300, bbox_inches='tight')
@@ -1022,7 +1021,8 @@ class ResultsAnalyzer:
 
     def analyze_statistical_significance(self, frequency_matrix_weighted: pd.DataFrame, 
                                        colors: dict, n_permutations: int = 1000, 
-                                       alpha: float = 0.05) -> Dict[str, Any]:
+                                       alpha: float = 0.05, use_joint_permutation_cov: bool = True, 
+                                       cov_permutations: int = 5000) -> Dict[str, Any]:
         """perform statistical significance testing using permutation tests with surprisal weighting"""
         print("\n=== STATISTICAL SIGNIFICANCE TESTING ===")
         
@@ -1043,184 +1043,169 @@ class ResultsAnalyzer:
             
             return matrix
 
-        def generate_null_distribution(analyzer, n_permutations=1000):
-            """calculate analytical null distribution (mean and variance) for proper significance testing"""
+        def generate_null_distribution(analyzer):
+            """analytical pair-specific null (mean & std) with correct Var(\bar X)=Var(X)/K"""
             import time
             from collections import Counter
-            from scipy.stats import norm
-            start_time = time.time()
-            
-            results_df = analyzer.get_results()
-            n_outlets = len(analyzer.outlet_names)
-            
-            print(f"calculating analytical null distribution (mean + variance)...")
-            print(f"processing {len(results_df)} clustering results")
-            
-            # calculate both expected value and variance for each clustering result
-            expected_frequencies = []
-            variance_frequencies = []
-            
-            for _, row in results_df.iterrows():
-                communities = row['communities']
-                if not communities:
+
+            start = time.time()
+            df = analyzer.get_results()
+            n_out = len(analyzer.outlet_names)
+            K = len(df)
+
+            print("pair-specific analytical null (corrected variance)")
+            print(f"processing {K} clustering results")
+
+            mean_sum = np.zeros((n_out, n_out))
+            var_sum  = np.zeros((n_out, n_out))
+
+            for _, row in df.iterrows():
+                comm = row['communities']
+                if not comm:
                     continue
-                
-                # get cluster sizes
-                cluster_sizes = list(Counter(communities.values()).values())
-                
-                # calculate E[X] and Var[X] for this clustering result
-                expected_x = 0.0
-                expected_x2 = 0.0
-                
-                for size in cluster_sizes:
-                    if size > 1:  # need at least 2 outlets for pairs
-                        # probability that random pair ends up in cluster of this size
-                        p_i = size * (size - 1) / (n_outlets * (n_outlets - 1))
-                        # surprisal weight for this cluster size
-                        w_i = -np.log2(size / n_outlets)
-                        
-                        # accumulate E[X] and E[X²]
-                        expected_x += p_i * w_i
-                        expected_x2 += p_i * (w_i ** 2)
-                
-                # variance = E[X²] - E[X]²
-                variance_x = expected_x2 - (expected_x ** 2)
-                
-                expected_frequencies.append(expected_x)
-                variance_frequencies.append(variance_x)
-            
-            # overall null distribution parameters
-            null_mean = np.mean(expected_frequencies) if expected_frequencies else 0.0
-            null_variance = np.mean(variance_frequencies) / len(expected_frequencies) if expected_frequencies else 0.0
-            null_std = np.sqrt(max(null_variance, 1e-10))  # avoid division by zero
-            
-            elapsed = time.time() - start_time
-            print(f"analytical calculation completed in {elapsed:.3f}s")
-            print(f"null mean: {null_mean:.6f}")
-            print(f"null std: {null_std:.6f}")
-            print(f"analytical solution (no permutations needed)")
-            
-            # return parameters for z-test instead of frequency matrix
+                sizes = Counter(comm.values())
+                ex = ex2 = 0.0
+                for sz in sizes.values():
+                    if sz > 1:
+                        p = sz*(sz-1)/(n_out*(n_out-1))
+                        w = -np.log2(sz / n_out)
+                        ex  += p * w
+                        ex2 += p * w * w
+                var_x = ex2 - ex**2
+                for i in range(n_out):
+                    if i not in comm: continue
+                    for j in range(i+1, n_out):
+                        if j not in comm: continue
+                        mean_sum[i,j] += ex
+                        mean_sum[j,i] += ex
+                        var_sum[i,j]  += var_x
+                        var_sum[j,i]  += var_x
+
+            mean_mat = mean_sum / max(K,1)
+            var_mat  = (var_sum / max(K,1)) / max(K,1)  # Var(mean) = Var(X)/K
+            std_mat  = np.sqrt(np.maximum(var_mat, 1e-10))
+
+            np.fill_diagonal(mean_mat, 0)
+            np.fill_diagonal(std_mat, 0)
+
+            tri = np.triu_indices(n_out,1)
+            g_mean = float(mean_mat[tri].mean()) if tri[0].size else 0.0
+            g_std  = float(std_mat[tri].mean()) if tri[0].size else 0.0
+
+            print(f"done in {time.time()-start:.2f}s | global mean {g_mean:.6f} | global std {g_std:.6f}")
+
             return {
-                'null_mean': null_mean,
-                'null_std': null_std,
-                'n_clustering_results': len(expected_frequencies)
+                'null_mean_matrix': pd.DataFrame(mean_mat, index=analyzer.outlet_names, columns=analyzer.outlet_names),
+                'null_std_matrix' : pd.DataFrame(std_mat,  index=analyzer.outlet_names, columns=analyzer.outlet_names),
+                'null_mean': g_mean,
+                'null_std': g_std,
+                'n_clustering_results': K
             }
 
         def directional_significance_test(frequency_matrix, null_params, alpha=0.05):
-            """analytical significance testing using z-tests"""
+            """vectorised two-tailed z-tests with Benjamini–Hochberg FDR correction.
+
+            returns (low_pairs, high_pairs, non_significant_pairs, significant_mask, corrected_p_df)
+            """
             from scipy.stats import norm
-            
-            n_outlets = frequency_matrix.shape[0]
-            significant_low_pairs = []
-            significant_high_pairs = []
-            non_significant_pairs = []
-            
-            null_mean = null_params['null_mean']
-            null_std = null_params['null_std']
-            
-            print(f"performing analytical significance tests for {n_outlets * (n_outlets - 1) // 2} outlet pairs...")
-            print(f"using z-test with null mean={null_mean:.6f}, std={null_std:.6f}")
-            
-            for i in range(n_outlets):
-                for j in range(i+1, n_outlets):
-                    observed_val = frequency_matrix.iloc[i, j]
-                    
-                    # z-test for significance
-                    if null_std > 0:
-                        z_score = (observed_val - null_mean) / null_std
-                        
-                        # one-tailed tests
-                        p_low = norm.cdf(z_score)  # P(Z <= z) for low values
-                        p_high = 1 - norm.cdf(z_score)  # P(Z >= z) for high values
+            try:
+                from statsmodels.stats.multitest import multipletests
+            except ImportError as e:
+                raise ImportError("statsmodels is required for FDR correction – please `pip install statsmodels`. ") from e
+
+            # matrices
+            obs = frequency_matrix.values.astype(float)
+            mu  = null_params['null_mean_matrix'].values.astype(float)
+            sigma = null_params['null_std_matrix'].values.astype(float)
+
+            # upper-triangular mask (i<j) with finite variance
+            triu_mask = np.triu(np.ones_like(obs, dtype=bool), k=1)
+            valid_mask = triu_mask & (sigma > 0)
+            rows, cols = np.where(valid_mask)
+            if rows.size == 0:
+                print("no testable outlet pairs (all std=0)")
+                return [], [], [], np.zeros_like(obs, dtype=bool), pd.DataFrame(np.ones_like(obs),
+                                                                                index=frequency_matrix.index,
+                                                                                columns=frequency_matrix.columns)
+
+            # z-scores & two-tailed p-values
+            z_vals = (obs[rows, cols] - mu[rows, cols]) / sigma[rows, cols]
+            p_vals = 2.0 * (1.0 - norm.cdf(np.abs(z_vals)))
+
+            # FDR correction
+            reject, p_adj, _, _ = multipletests(p_vals, alpha=alpha, method='fdr_bh')
+
+            # build matrices for downstream visualisation
+            p_adj_mat = np.ones_like(obs)
+            p_adj_mat[rows, cols] = p_adj
+            p_adj_mat[cols, rows] = p_adj  # symmetry
+            significant_mask = np.zeros_like(obs, dtype=bool)
+            significant_mask[rows, cols] = reject
+            significant_mask[cols, rows] = reject
+
+            # compile pair dictionaries
+            high_pairs = []
+            low_pairs = []
+            non_sig_pairs = []
+            idx_to_name = list(frequency_matrix.index)
+            for k, (i, j) in enumerate(zip(rows, cols)):
+                entry = {
+                    'outlet1': idx_to_name[i],
+                    'outlet2': idx_to_name[j],
+                    'observed': obs[i, j],
+                    'expected': mu[i, j],
+                    'deviation': obs[i, j] - mu[i, j],
+                    'z_score': z_vals[k],
+                    'p_value': p_adj[k]
+                }
+                if reject[k]:
+                    if entry['deviation'] > 0:
+                        high_pairs.append(entry)
                     else:
-                        # no variance means deterministic - simple comparison
-                        if observed_val < null_mean:
-                            p_low, p_high = 0.0, 1.0
-                        elif observed_val > null_mean:
-                            p_low, p_high = 1.0, 0.0
-                        else:
-                            p_low, p_high = 0.5, 0.5
-                    
-                    # check for significance
-                    is_significant = False
-                    if p_low < alpha:
-                        significant_low_pairs.append({
-                            'outlet1': frequency_matrix.index[i],
-                            'outlet2': frequency_matrix.columns[j], 
-                            'observed': observed_val,
-                            'expected': null_mean,
-                            'deviation': observed_val - null_mean,
-                            'z_score': z_score if null_std > 0 else np.nan,
-                            'p_value': p_low
-                        })
-                        is_significant = True
-                    
-                    if p_high < alpha:
-                        significant_high_pairs.append({
-                            'outlet1': frequency_matrix.index[i],
-                            'outlet2': frequency_matrix.columns[j],
-                            'observed': observed_val,
-                            'expected': null_mean,
-                            'deviation': observed_val - null_mean,
-                            'z_score': z_score if null_std > 0 else np.nan,
-                            'p_value': p_high
-                        })
-                        is_significant = True
-                    
-                    # collect non-significant pairs
-                    if not is_significant:
-                        # use the smaller p-value for non-significant pairs
-                        min_p_value = min(p_low, p_high)
-                        non_significant_pairs.append({
-                            'outlet1': frequency_matrix.index[i],
-                            'outlet2': frequency_matrix.columns[j],
-                            'observed': observed_val,
-                            'expected': null_mean,
-                            'deviation': observed_val - null_mean,
-                            'z_score': z_score if null_std > 0 else np.nan,
-                            'p_value': min_p_value
-                        })
-            
-            # sort by p-value
-            significant_low_pairs.sort(key=lambda x: x['p_value'])
-            significant_high_pairs.sort(key=lambda x: x['p_value'])
-            non_significant_pairs.sort(key=lambda x: x['p_value'], reverse=True)  # sort by highest p-value first
-            
-            return significant_low_pairs, significant_high_pairs, non_significant_pairs
-        
+                        low_pairs.append(entry)
+                else:
+                    non_sig_pairs.append(entry)
+
+            # sort by adjusted p-value
+            high_pairs.sort(key=lambda x: x['p_value'])
+            low_pairs.sort(key=lambda x: x['p_value'])
+            non_sig_pairs.sort(key=lambda x: x['p_value'])
+
+            return low_pairs, high_pairs, non_sig_pairs, significant_mask, pd.DataFrame(p_adj_mat,
+                                                                                        index=frequency_matrix.index,
+                                                                                        columns=frequency_matrix.columns)
+
         # run the significance analysis with surprisal weighting
         print(f"analyzing {len(self.get_results())} clustering results for surprisal-weighted significance testing")
         
         # generate analytical null distribution (much faster than permutations)
-        null_params = generate_null_distribution(self, n_permutations)
-        
-        # perform analytical significance test
+        null_params = generate_null_distribution(self)
+
+        # optionally refine the standard deviation using joint-permutation Monte-Carlo
+        if use_joint_permutation_cov:
+            print("estimating covariance term via joint-permutation Monte-Carlo ...")
+            emp_mean, emp_std = self._estimate_joint_permutation_mean_std(n_permutations=cov_permutations,
+                                                                         random_state=42)
+            # replace mean if estimation succeeded (non-zero K)
+            if emp_mean != 0.0:
+                print(f"replacing analytical mean={null_params['null_mean']:.6f} with empirical mean={emp_mean:.6f}")
+                null_params['null_mean'] = emp_mean
+
+            # replace std if empirical estimate positive
+            if emp_std > 0:
+                print(f"replacing analytical std={null_params['null_std']:.6f} with empirical std={emp_std:.6f}")
+                null_params['null_std'] = emp_std
+            else:
+                print("warning: empirical std estimation failed, keeping analytical std")
+
+        # perform analytical significance test (now with corrected std)
         print("performing significance tests...")
-        low_pairs, high_pairs, non_significant_pairs = directional_significance_test(frequency_matrix_weighted, null_params, alpha)
+        low_pairs, high_pairs, non_significant_pairs, significant_mask, corrected_p_df = directional_significance_test(frequency_matrix_weighted, null_params, alpha)
         
         # create significance mask for visualization
-        n_outlets = frequency_matrix_weighted.shape[0]
-        significant_mask = np.zeros((n_outlets, n_outlets), dtype=bool)
-        
-        # mark significant pairs
-        for pair in low_pairs + high_pairs:
-            i = frequency_matrix_weighted.index.get_loc(pair['outlet1'])
-            j = frequency_matrix_weighted.columns.get_loc(pair['outlet2'])
-            significant_mask[i, j] = True
-            significant_mask[j, i] = True  # symmetric
-        
-        # create corrected p-value matrix for visualization
-        corrected_p_df = pd.DataFrame(np.ones_like(frequency_matrix_weighted.values), 
-                                     index=frequency_matrix_weighted.index, 
-                                     columns=frequency_matrix_weighted.columns)
-        
-        for pair in low_pairs + high_pairs:
-            i = frequency_matrix_weighted.index.get_loc(pair['outlet1'])
-            j = frequency_matrix_weighted.columns.get_loc(pair['outlet2'])
-            corrected_p_df.iloc[i, j] = pair['p_value']
-            corrected_p_df.iloc[j, i] = pair['p_value']  # symmetric
-        
+        # `directional_significance_test` already returned `significant_mask` (boolean) and
+        # `corrected_p_df` (FDR-adjusted two-tailed p-values); we reuse them directly.
+
         # create heatmap colormap
         heatmap_cmap = LinearSegmentedColormap.from_list('custom_heatmap', 
                                                        ['#F7F7F7', '#F18F01', '#C73E1D'], N=256)
@@ -1260,6 +1245,7 @@ class ResultsAnalyzer:
         plt.show()
         
         # report results
+        n_outlets = frequency_matrix_weighted.shape[0]
         total_possible_pairs = n_outlets * (n_outlets - 1) // 2
         print(f"\nSURPRISAL-WEIGHTED SIGNIFICANCE TESTING RESULTS:")
         print(f"significantly low co-clustering pairs: {len(low_pairs)}")
@@ -1291,6 +1277,18 @@ class ResultsAnalyzer:
                 print(f"{i+1:2d}. {pair['outlet1']} <-> {pair['outlet2']}: "
                       f"obs={pair['observed']:.3f}, exp={pair['expected']:.3f}, "
                       f"dev={pair['deviation']:.3f}{z_str}, p={pair['p_value']:.6f}")
+        
+            # additional troubleshooting: pairs that fall below the mean (negative deviation) but are not significant
+            near_negative = [p for p in non_significant_pairs if p['deviation'] < 0]
+            if near_negative:
+                # show those with largest negative deviation and smallest p-values (closest to significance)
+                near_negative_sorted = sorted(near_negative, key=lambda x: x['p_value'])
+                print(f"\nTop 10 LOW pairs that are *almost* significant (negative deviation):")
+                for i, pair in enumerate(near_negative_sorted[:10]):
+                    z_str = f", z={pair['z_score']:.3f}" if not np.isnan(pair.get('z_score', np.nan)) else ""
+                    print(f"{i+1:2d}. {pair['outlet1']} <-> {pair['outlet2']}: "
+                          f"obs={pair['observed']:.3f}, exp={pair['expected']:.3f}, "
+                          f"dev={pair['deviation']:.3f}{z_str}, p={pair['p_value']:.6f}")
         
         return {
             'low_pairs': low_pairs,
@@ -1539,3 +1537,205 @@ class ResultsAnalyzer:
                 sim[i, j] = sim[j, i] = val
 
         return pd.DataFrame(sim, index=wins, columns=wins)
+
+    # ===== HELPER FOR COVARIANCE ESTIMATION =====
+
+    def _estimate_joint_permutation_mean_std(self, n_permutations: int = 5000,
+                                             random_state: Optional[int] = None,
+                                             pair: Tuple[int, int] = (0, 1)) -> Tuple[float, float]:
+        """estimate both the mean and std of X̄ via joint-permutation Monte-Carlo
+
+        this is identical to `_estimate_joint_permutation_std` but also returns the
+        empirical mean so that we can optionally replace the analytical mean with a
+        simulation-based estimate.
+        """
+        import numpy as np
+        from collections import Counter
+
+        if self.results_df.empty or self.outlet_names is None:
+            return 0.0, 0.0
+
+        n_outlets = len(self.outlet_names)
+        if n_outlets < 2:
+            return 0.0, 0.0
+
+        i, j = pair
+        if i == j or i >= n_outlets or j >= n_outlets:
+            i, j = 0, 1  # fall back to first two outlets
+
+        rng = np.random.default_rng(random_state)
+
+        # pre-compute label arrays and weight maps for every clustering run
+        label_arrays = []  # list[np.ndarray]
+        weight_maps = []   # list[dict]
+
+        for _, row in self.results_df.iterrows():
+            communities = row['communities']
+            labels = np.full(n_outlets, -1, dtype=int)
+            if communities:
+                for outlet_id, comm_id in communities.items():
+                    if 0 <= outlet_id < n_outlets:
+                        labels[outlet_id] = comm_id
+            # assign unique singleton ids to missing outlets
+            next_id = (labels.max() + 1) if labels.max() >= 0 else 0
+            for idx in range(n_outlets):
+                if labels[idx] == -1:
+                    labels[idx] = next_id
+                    next_id += 1
+            # cluster sizes and corresponding weights
+            unique, counts = np.unique(labels, return_counts=True)
+            size_map = dict(zip(unique, counts))
+            weight_map = {cid: -np.log2(sz / n_outlets) for cid, sz in size_map.items() if sz > 1}
+            label_arrays.append(labels)
+            weight_maps.append(weight_map)
+
+        label_arrays = np.asarray(label_arrays)  # shape (K, n_outlets)
+        K = label_arrays.shape[0]
+        if K == 0:
+            return 0.0, 0.0
+
+        samples = np.empty(n_permutations, dtype=float)
+
+        for p in range(n_permutations):
+            perm = rng.permutation(n_outlets)
+            total_weight = 0.0
+            for r in range(K):
+                perm_labels = label_arrays[r][perm]
+                if perm_labels[i] == perm_labels[j]:
+                    cid = perm_labels[i]
+                    w = weight_maps[r].get(cid, 0.0)
+                    total_weight += w
+            samples[p] = total_weight / K
+
+        return float(samples.mean()), float(samples.std(ddof=1))
+
+    def construct_validated_clustering(self, high_pairs: List[Dict[str, Any]], low_pairs: List[Dict[str, Any]],
+                                       null_mean: float, null_std: float, n_clusters: Optional[int] = None,
+                                       linkage_method: str = "ward") -> Dict[str, Any]:
+        """build a statistically-validated final clustering
+
+        parameters
+        ----------
+        high_pairs : list[dict]
+            output of ``analyze_statistical_significance`` – pairs with significantly *higher* than
+            expected co-clustering (p < α). each dict must contain 'outlet1', 'outlet2', 'observed'.
+        low_pairs : list[dict]
+            pairs with significantly *lower* than expected co-clustering (p < α).
+        null_mean, null_std : float
+            parameters of the analytical null distribution (used to convert observed frequencies
+            to z-scores so that edge weights across pairs are comparable).
+        n_clusters : int | None, default None
+            number of clusters to extract with ``scipy.cluster.hierarchy.fcluster``. if ``None`` the
+            function automatically selects an appropriate number based on the largest gap in
+            linkage distances (simple elbow heuristic).
+        linkage_method : str, default "ward"
+            linkage to use for hierarchical clustering.
+
+        returns
+        -------
+        dict with keys::
+            'linkage'        – linkage matrix from ``scipy.cluster.hierarchy``
+            'labels'         – 1-D array of community labels for every outlet (order = self.outlet_names)
+            'communities'    – dict {community_id: [outlet_names]}
+        """
+        from scipy.cluster.hierarchy import linkage, fcluster, leaves_list
+        from scipy.spatial.distance import squareform
+        import numpy as np
+
+        if self.outlet_names is None:
+            print("no outlet names available – cannot construct clustering")
+            return {}
+
+        n_outlets = len(self.outlet_names)
+        # initialise signed similarity matrix (float)
+        S = np.zeros((n_outlets, n_outlets), dtype=float)
+
+        # helper to translate outlet -> index
+        def _idx(outlet):
+            return self.outlet_names.index(outlet)
+
+        # add positive edges (high co-clustering)
+        print(f"adding {len(high_pairs)} positive edges")
+        for pair in high_pairs:
+            try:
+                i, j = _idx(pair['outlet1']), _idx(pair['outlet2'])
+            except ValueError:
+                continue  # outlet not found
+            # convert to z-score so that magnitudes are comparable across pairs
+            if null_std > 0:
+                z = (pair['observed'] - null_mean) / null_std
+            else:
+                z = 0.0
+            S[i, j] = S[j, i] = max(z, 0.0)  # ensure positive weight
+
+        # add negative edges (low co-clustering)
+        print(f"adding {len(low_pairs)} negative edges")
+        for pair in low_pairs:
+            try:
+                i, j = _idx(pair['outlet1']), _idx(pair['outlet2'])
+            except ValueError:
+                continue
+            if null_std > 0:
+                z = (null_mean - pair['observed']) / null_std
+            else:
+                z = 0.0
+            S[i, j] = S[j, i] = -max(z, 0.0)  # negative weight
+
+        if not np.any(S != 0):
+            print("no significant edges – returning empty result")
+            return {}
+
+        # convert signed similarity to distance
+        # positive similarity  -> smaller distance (<1)
+        # zero similarity      -> neutral distance (=1)
+        # negative similarity  -> larger distance (>1)
+        pos_max = S[S > 0].max() if np.any(S > 0) else 0.0
+        neg_max = np.abs(S[S < 0]).max() if np.any(S < 0) else 0.0
+        D = np.ones_like(S)
+        for i in range(n_outlets):
+            for j in range(i + 1, n_outlets):
+                w = S[i, j]
+                if w > 0 and pos_max > 0:
+                    D[i, j] = D[j, i] = 1.0 - (w / pos_max)  # range (0,1)
+                elif w < 0 and neg_max > 0:
+                    D[i, j] = D[j, i] = 1.0 + (abs(w) / neg_max)  # >1
+                # w == 0 keeps distance = 1
+        np.fill_diagonal(D, 0.0)
+
+        # hierarchical clustering
+        condensed = squareform(D, checks=False)
+        Z = linkage(condensed, method=linkage_method, metric='euclidean')
+
+        # if n_clusters not provided, determine an optimal value using the largest gap
+        # (elbow method) in successive linkage distances
+        if n_clusters is None:
+            if Z.shape[0] > 1:
+                merge_dists = Z[:, 2]
+                # gaps between consecutive merges (sorted ascending by construction)
+                gaps = np.diff(merge_dists)
+                if gaps.size > 0:
+                    max_gap_idx = int(np.argmax(gaps))
+                    # number of clusters present **before** the biggest merge takes place
+                    est_clusters = n_outlets - (max_gap_idx + 1)
+                    n_clusters = max(2, est_clusters)
+                else:
+                    n_clusters = 1
+            else:
+                n_clusters = 1
+            print(f"auto-selected n_clusters = {n_clusters} based on largest linkage gap")
+
+        # extract flat clusters
+        labels = fcluster(Z, n_clusters, criterion='maxclust')
+
+        # build community dict
+        communities = defaultdict(list)
+        for idx, cid in enumerate(labels):
+            communities[cid].append(self.outlet_names[idx])
+
+        return {
+            'linkage': Z,
+            'labels': labels,
+            'communities': dict(communities),
+            'signed_similarity': S,
+            'distance_matrix': D
+        }

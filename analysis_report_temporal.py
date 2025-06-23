@@ -99,8 +99,8 @@ print("=== MEDIA BIAS NETWORK ANALYSIS ===")
 # experiment parameters (temporal sampling)
 data_dir = 'data/daily_cluster_matrices_min_6'
 # consecutive window configuration
-window_size = 30  # days per window
-step_size = 30    # non-overlapping windows; set < window_size for sliding windows
+window_size = 60  # days per window
+step_size = 60    # non-overlapping windows; set < window_size for sliding windows
 
 results_file = f'results/temporal_experiment_{window_size}win_{step_size}step.pkl'
 
@@ -170,6 +170,47 @@ else:
 # %%
 
 # =============================================================================
+# 1.1. METHOD STABILITY RANKING (variance in k across samples)
+# =============================================================================
+
+print("\n=== METHOD STABILITY RANKING ===")
+
+# visualize top-N most stable method combinations (low variance in k)
+viz.plot_stability_ranking(top_n=15)
+
+# fetch stability dataframe for further inspection
+stability_df_overall = analyzer.analyze_stability()
+if not stability_df_overall.empty:
+    # pick the single most stable combination
+    best = stability_df_overall.iloc[0]
+    best_net = best['network_method']
+    best_comm = best['community_method']
+    best_param = best['param_id']
+
+    consistency = analyzer.method_consistency(
+        network_method=best_net,
+        community_method=best_comm,
+        param_id=best_param,
+        metric='ari'
+    )
+
+    print("\nMost stable method combination across samples:")
+    print(f"  network method : {best_net}")
+    print(f"  community method: {best_comm}")
+    print(f"  param id        : {best_param}")
+    if 'error' not in consistency:
+        print(f"  mean consistency (ARI): {consistency['mean_consistency']}")
+        print(f"  std  consistency      : {consistency['std_consistency']}")
+        print(f"  comparisons           : {consistency['n_comparisons']}")
+    else:
+        # fallback message if consistency couldn't be computed (e.g., only one sample)
+        print(f"  consistency analysis unavailable: {consistency['error']}")
+else:
+    print("Stability dataframe is empty – skipping consistency check")
+
+# %%
+
+# =============================================================================
 # 1.2. TEMPORAL ROBUSTNESS ANALYSIS (stability across windows)
 # =============================================================================
 
@@ -200,6 +241,63 @@ if not stability_df.empty:
     print(f"  Max  ARI: {off_diag.max():.3f}")
 else:
     print("Stability matrix could not be computed (insufficient data)")
+
+# =============================================================================
+# 1.3. ADJACENT WINDOW DRIFT ANALYSIS
+# =============================================================================
+if not stability_df.empty and len(stability_df) > 1:
+    consecutive_ari = [stability_df.iloc[i, i + 1]
+                       for i in range(len(stability_df) - 1)]
+    plt.figure(figsize=(8, 4))
+    plt.plot(range(1, len(consecutive_ari) + 1),
+             consecutive_ari, marker='o',
+             color=COLORS['primary'], linewidth=2)
+    plt.ylim(0, 1)
+    plt.xlabel('window index (t → t+1)')
+    plt.ylabel('adjusted rand index')
+    plt.title(f'consecutive-window drift '
+              f'(window={window_size}d, step={step_size}d)',
+              fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('results/temporal_drift_ari.png',
+                dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print("\nConsecutive-window drift:")
+    print(f"  mean ARI: {np.mean(consecutive_ari):.3f}")
+    print(f"  std  ARI: {np.std(consecutive_ari):.3f}")
+else:
+    print("Consecutive-window drift not computed (need ≥2 windows)")
+
+# =============================================================================
+# 1.4. LAG SIMILARITY PROFILE
+# =============================================================================
+if not stability_df.empty and len(stability_df) > 2:
+    max_lag = min(6, len(stability_df) - 1)  # keep plot compact
+    lag_means = []
+    for lag in range(1, max_lag + 1):
+        vals = [stability_df.iloc[i, i + lag]
+                for i in range(len(stability_df) - lag)]
+        lag_means.append(np.mean(vals))
+
+    plt.figure(figsize=(6, 4))
+    plt.bar(range(1, max_lag + 1), lag_means,
+            color=COLORS['secondary'], alpha=0.8)
+    plt.ylim(0, 1)
+    plt.xlabel('lag (windows apart)')
+    plt.ylabel('mean ARI')
+    plt.title('time-lag similarity profile', fontweight='bold')
+    plt.tight_layout()
+    plt.savefig('results/temporal_lag_profile.png',
+                dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print("\nLag similarity profile:")
+    for lag, val in enumerate(lag_means, 1):
+        print(f"  lag {lag}: mean ARI = {val:.3f}")
+else:
+    print("Lag similarity profile not computed (need ≥3 windows)")
 
 # %%
 
@@ -327,7 +425,7 @@ community_stats = community_results['community_stats']
 # =============================================================================
 
 # use analyzer method for statistical significance testing
-significance_results = analyzer.analyze_statistical_significance(frequency_matrix_weighted, COLORS)
+significance_results = analyzer.analyze_statistical_significance(frequency_matrix_weighted, COLORS, alpha=0.001)
 
 # extract results for further use
 low_pairs = significance_results['low_pairs']
@@ -336,6 +434,65 @@ significant_mask = significance_results['significant_mask']
 corrected_p_df = significance_results['corrected_p_df']
 
 # %%
+
+# =============================================================================
+# 7.5. SIGNIFICANTLY VALIDATED CLUSTERING (SIGNED SIMILARITY)
+# =============================================================================
+
+print("\n=== SIGNIFICANTLY VALIDATED CLUSTERING (SIGNED SIMILARITY) ===")
+
+validated = analyzer.construct_validated_clustering(
+    high_pairs=high_pairs,
+    low_pairs=low_pairs,
+    null_mean=significance_results['null_mean'],
+    null_std=significance_results['null_std'],
+    # n_clusters=3
+)
+
+if validated:
+    Z_valid = validated['linkage']
+    labels_valid = validated['labels']
+    communities_valid = validated['communities']
+    dist_valid = validated['distance_matrix']
+
+    print(f"\nConstructed {len(communities_valid)} validated communities:")
+    for cid, members in sorted(communities_valid.items()):
+        print(f"  Community {cid} ({len(members)} outlets): {', '.join(members)}")
+
+    # visualize dendrogram and heatmap
+    try:
+        from scipy.cluster.hierarchy import leaves_list, dendrogram
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LinearSegmentedColormap
+
+        order = leaves_list(Z_valid)
+        ordered_dist = pd.DataFrame(dist_valid, index=analyzer.outlet_names,
+                                    columns=analyzer.outlet_names).iloc[order, order]
+
+        # custom cmap: blue (attraction) – white – red (repulsion)
+        cmap_signed = LinearSegmentedColormap.from_list('signed_cmap', ['#2E86AB', '#F7F7F7', '#C73E1D'], N=256)
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+        # heatmap of signed similarities translated to distance
+        sns.heatmap(ordered_dist, cmap=cmap_signed, square=True, ax=axes[0],
+                    cbar_kws={'label': 'Signed distance ( <1 attract, >1 repel )'})
+        axes[0].set_title('Signed Distance Matrix (ordered)')
+        axes[0].tick_params(axis='both', labelsize=6)
+
+        # dendrogram
+        dendrogram(Z_valid, labels=[analyzer.outlet_names[i] for i in order],
+                   orientation='right', leaf_font_size=6, ax=axes[1])
+        axes[1].set_title('Hierarchical Clustering (validated edges)')
+        plt.tight_layout()
+        os.makedirs('results', exist_ok=True)
+        plt.savefig('results/final_validated_consensus_signed.png', dpi=300, bbox_inches='tight')
+        plt.show()
+    except Exception as e:
+        print(f"Visualization failed: {e}")
+else:
+    print("Could not construct validated clustering (no significant edges)")
 
 # %%
 
@@ -1215,195 +1372,199 @@ else:
     print("No significantly high co-clustering pairs found to visualize")
 
 # %%
-# =============================================================================
-# 11. NULL DISTRIBUTION VALIDATION AND COMPARISON
-# =============================================================================
 
-print("\n=== NULL DISTRIBUTION VALIDATION ===")
-print("Validating analytical null distribution against empirical permutations...")
 
-# 1. single clustering validation (as a sanity check)
-print("\n1. Single Clustering Validation:")
-single_validation = analyzer.validate_null_distribution(
-    n_permutations=5000,
-    clustering_index=0,
-    random_state=42,
-    save_path='results/single_clustering_validation.png'
-)
-
-# 2. aggregate validation across all clusterings
-print("\n2. Aggregate Validation (All Clusterings):")
-# test multiple random pairs to check consistency
-test_pairs = [(5, 15), (10, 25), (20, 35), (2, 40)]  # various outlet pairs
-aggregate_validations = []
-
-for pair in test_pairs:
-    print(f"\nTesting pair {pair}...")
-    empirical_result = analyzer.empirical_null_for_pair(
-        pair=pair, 
-        n_permutations=1000, 
-        random_state=42
-    )
-    
-    if empirical_result:
-        # get analytical values from significance results
-        analytical_mean = significance_results['null_mean']
-        analytical_std = significance_results['null_std']
-        
-        empirical_mean = empirical_result['empirical_mean']
-        empirical_std = empirical_result['empirical_std']
-        
-        # calculate differences
-        mean_diff = abs(empirical_mean - analytical_mean)
-        std_diff = abs(empirical_std - analytical_std)
-        mean_rel_error = mean_diff / analytical_mean if analytical_mean > 0 else float('inf')
-        std_rel_error = std_diff / analytical_std if analytical_std > 0 else float('inf')
-        
-        validation_result = {
-            'pair': pair,
-            'analytical_mean': analytical_mean,
-            'empirical_mean': empirical_mean,
-            'analytical_std': analytical_std,
-            'empirical_std': empirical_std,
-            'mean_diff': mean_diff,
-            'std_diff': std_diff,
-            'mean_rel_error': mean_rel_error,
-            'std_rel_error': std_rel_error
-        }
-        
-        aggregate_validations.append(validation_result)
-        
-        print(f"  Analytical: mean={analytical_mean:.6f}, std={analytical_std:.6f}")
-        print(f"  Empirical:  mean={empirical_mean:.6f}, std={empirical_std:.6f}")
-        print(f"  Differences: Δmean={mean_diff:.6f} ({mean_rel_error:.1%}), Δstd={std_diff:.6f} ({std_rel_error:.1%})")
-
-# 3. create comparison visualization
-if aggregate_validations:
-    print("\n3. Validation Summary:")
-    
-    # create summary dataframe
-    validation_df = pd.DataFrame(aggregate_validations)
-    
-    print("Validation Results Summary:")
-    print(f"  Mean relative error (mean): {validation_df['mean_rel_error'].mean():.1%} ± {validation_df['mean_rel_error'].std():.1%}")
-    print(f"  Mean relative error (std):  {validation_df['std_rel_error'].mean():.1%} ± {validation_df['std_rel_error'].std():.1%}")
-    
-    # check if errors are acceptable (< 5% typically)
-    mean_errors_ok = (validation_df['mean_rel_error'] < 0.05).all()
-    std_errors_ok = (validation_df['std_rel_error'] < 0.05).all()
-    
-    print(f"  Mean validation: {'✓ PASS' if mean_errors_ok else '✗ FAIL'} (all errors < 5%)")
-    print(f"  Std validation:  {'✓ PASS' if std_errors_ok else '✗ FAIL'} (all errors < 5%)")
-    
-    # create comparison plot
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    
-    # mean comparison
-    axes[0].scatter(validation_df['analytical_mean'], validation_df['empirical_mean'], 
-                   color=COLORS['primary'], s=100, alpha=0.7, edgecolors=COLORS['text'])
-    
-    # add perfect correlation line
-    min_mean = min(validation_df['analytical_mean'].min(), validation_df['empirical_mean'].min())
-    max_mean = max(validation_df['analytical_mean'].max(), validation_df['empirical_mean'].max())
-    axes[0].plot([min_mean, max_mean], [min_mean, max_mean], 
-                color=COLORS['quaternary'], linestyle='--', alpha=0.8, label='Perfect Agreement')
-    
-    axes[0].set_xlabel('Analytical Mean', fontweight='bold')
-    axes[0].set_ylabel('Empirical Mean', fontweight='bold')
-    axes[0].set_title('Null Distribution Mean\nAnalytical vs Empirical', fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-    
-    # std comparison
-    axes[1].scatter(validation_df['analytical_std'], validation_df['empirical_std'], 
-                   color=COLORS['secondary'], s=100, alpha=0.7, edgecolors=COLORS['text'])
-    
-    # add perfect correlation line
-    min_std = min(validation_df['analytical_std'].min(), validation_df['empirical_std'].min())
-    max_std = max(validation_df['analytical_std'].max(), validation_df['empirical_std'].max())
-    axes[1].plot([min_std, max_std], [min_std, max_std], 
-                color=COLORS['quaternary'], linestyle='--', alpha=0.8, label='Perfect Agreement')
-    
-    axes[1].set_xlabel('Analytical Std', fontweight='bold')
-    axes[1].set_ylabel('Empirical Std', fontweight='bold')
-    axes[1].set_title('Null Distribution Std\nAnalytical vs Empirical', fontweight='bold')
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('results/null_distribution_validation_comparison.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    # 4. investigate potential causes of discrepancy if validation fails
-    if not (mean_errors_ok and std_errors_ok):
-        print("\n4. Investigating Potential Issues:")
-        
-        # check clustering independence
-        print("  Checking clustering independence...")
-        
-        # calculate correlation between consecutive clusterings
-        results_df = analyzer.get_results()
-        if len(results_df) > 1:
-            # get a sample pair for correlation analysis
-            test_pair = test_pairs[0]
-            i, j = test_pair
-            
-            # extract weights for this pair across all clusterings
-            pair_weights = []
-            for _, row in results_df.iterrows():
-                communities = row['communities']
-                if i in communities and j in communities:
-                    if communities[i] == communities[j]:
-                        # calculate cluster size and weight
-                        cluster_sizes = Counter(communities.values())
-                        cluster_id = communities[i]
-                        size = cluster_sizes[cluster_id]
-                        weight = -np.log(size / len(analyzer.outlet_names))
-                        pair_weights.append(weight)
-                    else:
-                        pair_weights.append(0.0)
-                else:
-                    pair_weights.append(0.0)
-            
-            # calculate autocorrelation
-            if len(pair_weights) > 1:
-                autocorr = np.corrcoef(pair_weights[:-1], pair_weights[1:])[0, 1]
-                print(f"    Lag-1 autocorrelation: {autocorr:.3f}")
-                
-                if abs(autocorr) > 0.1:
-                    print(f"    ⚠️  High autocorrelation detected! Clusterings may not be independent.")
-                    print(f"    This could explain why empirical std > analytical std")
-                else:
-                    print(f"    ✓ Autocorrelation is low, clusterings appear independent")
-        
-        # check for other potential issues
-        max_rel_error = max(validation_df['mean_rel_error'].max(), validation_df['std_rel_error'].max())
-        if max_rel_error > 0.2:
-            print(f"    ⚠️  Large relative errors (>{max_rel_error:.1%}) suggest potential issues:")
-            print(f"      - Check if cluster size distributions are as expected")
-            print(f"      - Verify surprisal weight calculations")
-            print(f"      - Consider numerical precision issues")
-
-# 5. final assessment
-print(f"\n=== NULL DISTRIBUTION VALIDATION SUMMARY ===")
-if aggregate_validations:
-    overall_pass = mean_errors_ok and std_errors_ok
-    print(f"Overall validation: {'✓ PASS' if overall_pass else '✗ NEEDS INVESTIGATION'}")
-    
-    if overall_pass:
-        print("✓ Analytical null distribution is accurate")
-        print("✓ Statistical significance results are reliable")
-        print("✓ P-values can be trusted for interpretation")
-    else:
-        print("⚠️  Analytical vs empirical discrepancy detected")
-        print("⚠️  Statistical significance results should be interpreted with caution")
-        print("⚠️  Consider using empirical permutation tests instead")
-        
-        # suggest corrected significance threshold
-        if validation_df['std_rel_error'].mean() > 0.05:
-            correction_factor = validation_df['empirical_std'].mean() / validation_df['analytical_std'].mean()
-            print(f"⚠️  Suggested correction factor for std: {correction_factor:.3f}")
-else:
-    print("⚠️  Could not validate null distribution - no successful comparisons")
 
 # %%
+# # =============================================================================
+# # 11. NULL DISTRIBUTION VALIDATION AND COMPARISON
+# # =============================================================================
+
+# print("\n=== NULL DISTRIBUTION VALIDATION ===")
+# print("Validating analytical null distribution against empirical permutations...")
+
+# # 1. single clustering validation (as a sanity check)
+# print("\n1. Single Clustering Validation:")
+# single_validation = analyzer.validate_null_distribution(
+#     n_permutations=5000,
+#     clustering_index=0,
+#     random_state=42,
+#     save_path='results/single_clustering_validation.png'
+# )
+
+# # 2. aggregate validation across all clusterings
+# print("\n2. Aggregate Validation (All Clusterings):")
+# # test multiple random pairs to check consistency
+# test_pairs = [(5, 15), (10, 25), (20, 35), (2, 40)]  # various outlet pairs
+# aggregate_validations = []
+
+# for pair in test_pairs:
+#     print(f"\nTesting pair {pair}...")
+#     empirical_result = analyzer.empirical_null_for_pair(
+#         pair=pair, 
+#         n_permutations=1000, 
+#         random_state=42
+#     )
+    
+#     if empirical_result:
+#         # get analytical values from significance results
+#         analytical_mean = significance_results['null_mean']
+#         analytical_std = significance_results['null_std']
+        
+#         empirical_mean = empirical_result['empirical_mean']
+#         empirical_std = empirical_result['empirical_std']
+        
+#         # calculate differences
+#         mean_diff = abs(empirical_mean - analytical_mean)
+#         std_diff = abs(empirical_std - analytical_std)
+#         mean_rel_error = mean_diff / analytical_mean if analytical_mean > 0 else float('inf')
+#         std_rel_error = std_diff / analytical_std if analytical_std > 0 else float('inf')
+        
+#         validation_result = {
+#             'pair': pair,
+#             'analytical_mean': analytical_mean,
+#             'empirical_mean': empirical_mean,
+#             'analytical_std': analytical_std,
+#             'empirical_std': empirical_std,
+#             'mean_diff': mean_diff,
+#             'std_diff': std_diff,
+#             'mean_rel_error': mean_rel_error,
+#             'std_rel_error': std_rel_error
+#         }
+        
+#         aggregate_validations.append(validation_result)
+        
+#         print(f"  Analytical: mean={analytical_mean:.6f}, std={analytical_std:.6f}")
+#         print(f"  Empirical:  mean={empirical_mean:.6f}, std={empirical_std:.6f}")
+#         print(f"  Differences: Δmean={mean_diff:.6f} ({mean_rel_error:.1%}), Δstd={std_diff:.6f} ({std_rel_error:.1%})")
+
+# # 3. create comparison visualization
+# if aggregate_validations:
+#     print("\n3. Validation Summary:")
+    
+#     # create summary dataframe
+#     validation_df = pd.DataFrame(aggregate_validations)
+    
+#     print("Validation Results Summary:")
+#     print(f"  Mean relative error (mean): {validation_df['mean_rel_error'].mean():.1%} ± {validation_df['mean_rel_error'].std():.1%}")
+#     print(f"  Mean relative error (std):  {validation_df['std_rel_error'].mean():.1%} ± {validation_df['std_rel_error'].std():.1%}")
+    
+#     # check if errors are acceptable (< 5% typically)
+#     mean_errors_ok = (validation_df['mean_rel_error'] < 0.05).all()
+#     std_errors_ok = (validation_df['std_rel_error'] < 0.05).all()
+    
+#     print(f"  Mean validation: {'✓ PASS' if mean_errors_ok else '✗ FAIL'} (all errors < 5%)")
+#     print(f"  Std validation:  {'✓ PASS' if std_errors_ok else '✗ FAIL'} (all errors < 5%)")
+    
+#     # create comparison plot
+#     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+#     # mean comparison
+#     axes[0].scatter(validation_df['analytical_mean'], validation_df['empirical_mean'], 
+#                    color=COLORS['primary'], s=100, alpha=0.7, edgecolors=COLORS['text'])
+    
+#     # add perfect correlation line
+#     min_mean = min(validation_df['analytical_mean'].min(), validation_df['empirical_mean'].min())
+#     max_mean = max(validation_df['analytical_mean'].max(), validation_df['empirical_mean'].max())
+#     axes[0].plot([min_mean, max_mean], [min_mean, max_mean], 
+#                 color=COLORS['quaternary'], linestyle='--', alpha=0.8, label='Perfect Agreement')
+    
+#     axes[0].set_xlabel('Analytical Mean', fontweight='bold')
+#     axes[0].set_ylabel('Empirical Mean', fontweight='bold')
+#     axes[0].set_title('Null Distribution Mean\nAnalytical vs Empirical', fontweight='bold')
+#     axes[0].legend()
+#     axes[0].grid(True, alpha=0.3)
+    
+#     # std comparison
+#     axes[1].scatter(validation_df['analytical_std'], validation_df['empirical_std'], 
+#                    color=COLORS['secondary'], s=100, alpha=0.7, edgecolors=COLORS['text'])
+    
+#     # add perfect correlation line
+#     min_std = min(validation_df['analytical_std'].min(), validation_df['empirical_std'].min())
+#     max_std = max(validation_df['analytical_std'].max(), validation_df['empirical_std'].max())
+#     axes[1].plot([min_std, max_std], [min_std, max_std], 
+#                 color=COLORS['quaternary'], linestyle='--', alpha=0.8, label='Perfect Agreement')
+    
+#     axes[1].set_xlabel('Analytical Std', fontweight='bold')
+#     axes[1].set_ylabel('Empirical Std', fontweight='bold')
+#     axes[1].set_title('Null Distribution Std\nAnalytical vs Empirical', fontweight='bold')
+#     axes[1].legend()
+#     axes[1].grid(True, alpha=0.3)
+    
+#     plt.tight_layout()
+#     plt.savefig('results/null_distribution_validation_comparison.png', dpi=300, bbox_inches='tight')
+#     plt.show()
+    
+#     # 4. investigate potential causes of discrepancy if validation fails
+#     if not (mean_errors_ok and std_errors_ok):
+#         print("\n4. Investigating Potential Issues:")
+        
+#         # check clustering independence
+#         print("  Checking clustering independence...")
+        
+#         # calculate correlation between consecutive clusterings
+#         results_df = analyzer.get_results()
+#         if len(results_df) > 1:
+#             # get a sample pair for correlation analysis
+#             test_pair = test_pairs[0]
+#             i, j = test_pair
+            
+#             # extract weights for this pair across all clusterings
+#             pair_weights = []
+#             for _, row in results_df.iterrows():
+#                 communities = row['communities']
+#                 if i in communities and j in communities:
+#                     if communities[i] == communities[j]:
+#                         # calculate cluster size and weight
+#                         cluster_sizes = Counter(communities.values())
+#                         cluster_id = communities[i]
+#                         size = cluster_sizes[cluster_id]
+#                         weight = -np.log(size / len(analyzer.outlet_names))
+#                         pair_weights.append(weight)
+#                     else:
+#                         pair_weights.append(0.0)
+#                 else:
+#                     pair_weights.append(0.0)
+            
+#             # calculate autocorrelation
+#             if len(pair_weights) > 1:
+#                 autocorr = np.corrcoef(pair_weights[:-1], pair_weights[1:])[0, 1]
+#                 print(f"    Lag-1 autocorrelation: {autocorr:.3f}")
+                
+#                 if abs(autocorr) > 0.1:
+#                     print(f"    ⚠️  High autocorrelation detected! Clusterings may not be independent.")
+#                     print(f"    This could explain why empirical std > analytical std")
+#                 else:
+#                     print(f"    ✓ Autocorrelation is low, clusterings appear independent")
+        
+#         # check for other potential issues
+#         max_rel_error = max(validation_df['mean_rel_error'].max(), validation_df['std_rel_error'].max())
+#         if max_rel_error > 0.2:
+#             print(f"    ⚠️  Large relative errors (>{max_rel_error:.1%}) suggest potential issues:")
+#             print(f"      - Check if cluster size distributions are as expected")
+#             print(f"      - Verify surprisal weight calculations")
+#             print(f"      - Consider numerical precision issues")
+
+# # 5. final assessment
+# print(f"\n=== NULL DISTRIBUTION VALIDATION SUMMARY ===")
+# if aggregate_validations:
+#     overall_pass = mean_errors_ok and std_errors_ok
+#     print(f"Overall validation: {'✓ PASS' if overall_pass else '✗ NEEDS INVESTIGATION'}")
+    
+#     if overall_pass:
+#         print("✓ Analytical null distribution is accurate")
+#         print("✓ Statistical significance results are reliable")
+#         print("✓ P-values can be trusted for interpretation")
+#     else:
+#         print("⚠️  Analytical vs empirical discrepancy detected")
+#         print("⚠️  Statistical significance results should be interpreted with caution")
+#         print("⚠️  Consider using empirical permutation tests instead")
+        
+#         # suggest corrected significance threshold
+#         if validation_df['std_rel_error'].mean() > 0.05:
+#             correction_factor = validation_df['empirical_std'].mean() / validation_df['analytical_std'].mean()
+#             print(f"⚠️  Suggested correction factor for std: {correction_factor:.3f}")
+# else:
+#     print("⚠️  Could not validate null distribution - no successful comparisons")
+
+# # %%
