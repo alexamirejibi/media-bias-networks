@@ -10,6 +10,8 @@ from matplotlib.colors import LinearSegmentedColormap
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, leaves_list
 from scipy.spatial.distance import squareform
 from sklearn.metrics import adjusted_rand_score
+from scipy.stats import wilcoxon, ttest_1samp
+from statsmodels.stats.multitest import multipletests
 warnings.filterwarnings('ignore')
 
 # import partition metrics for comparing clusterings
@@ -1739,3 +1741,328 @@ class ResultsAnalyzer:
             'signed_similarity': S,
             'distance_matrix': D
         }
+
+    # ===== SIGNIFICANCE-ACROSS-SAMPLES =====
+
+    def analyze_significance_across_samples(self, alpha: float = 0.05, min_sample_frac: float = 0.5, 
+                                          test: str = "auto") -> Dict[str, Any]:
+        """Evaluate statistical significance of outlet-pair co-clustering across independent samples
+        
+        Parameters
+        ----------
+        alpha : float, default 0.05
+            Significance level for FDR correction
+        min_sample_frac : float, default 0.5
+            Minimum fraction of samples where both outlets must appear for testing
+        test : str, default "auto"
+            Statistical test to use: "auto", "t", or "wilcoxon"
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing high_pairs, low_pairs, p_adj_matrix, n_samples, masked_pairs
+        """
+        print("\n=== SIGNIFICANCE ACROSS SAMPLES ===")
+        
+        # Step A: Input checks
+        if self.outlet_names is None:
+            raise ValueError("outlet_names is not set")
+        
+        if 'sample_id' not in self.results_df.columns:
+            raise ValueError("sample_id column not found in results_df")
+        
+        unique_samples = self.results_df['sample_id'].unique()
+        if len(unique_samples) < 2:
+            raise ValueError(f"Need at least 2 distinct sample_id values, found {len(unique_samples)}")
+        
+        print(f"Processing {len(unique_samples)} samples")
+        
+        # Step B: Within-sample aggregation
+        samples, X = self._stack_sample_matrices()
+        S, n_outlets = len(samples), len(self.outlet_names)
+        
+        # Step C: Per-sample analytical null
+        MU, VAR = self._generate_null_for_samples(samples)
+        
+        # Step D: Masking for missing outlets
+        testable, masked_pairs = self._create_outlet_mask(VAR, min_sample_frac, S)
+        
+        # Step E: Observed mean & residuals
+        obs_mean = X.mean(axis=0)
+        exp_mean = MU.mean(axis=0)
+        Y = X - MU  # residuals: Y_k = X_k - MU_k
+        
+        # Step F: Select statistical test
+        if test == "auto":
+            test_method = "t" if S >= 15 else "wilcoxon"
+        else:
+            test_method = test
+        print(f"Using {test_method} test for {S} samples")
+        
+        # Step G: Compute p-values
+        p_values = self._compute_pvalues_across_samples(Y, VAR, testable, test_method, S)
+        
+        # Step H: Multiple-testing correction
+        p_adj_matrix, significant_pairs = self._apply_fdr_correction(p_values, testable, alpha, n_outlets)
+        
+        # Step I: Assemble outputs
+        high_pairs, low_pairs = self._classify_significant_pairs(significant_pairs, obs_mean, exp_mean)
+        
+        # Print console summary
+        print(f"\nRESULTS SUMMARY:")
+        print(f"Samples analyzed: {S}")
+        print(f"Significantly HIGH pairs: {len(high_pairs)}")
+        print(f"Significantly LOW pairs: {len(low_pairs)}")
+        print(f"Masked pairs: {len(masked_pairs)}")
+        
+        # Step J: Visualization
+        self._visualize_across_samples_results(p_adj_matrix, testable, alpha)
+        
+        return {
+            'high_pairs': high_pairs,
+            'low_pairs': low_pairs,
+            'p_adj_matrix': p_adj_matrix,
+            'n_samples': S,
+            'masked_pairs': masked_pairs
+        }
+
+    def _stack_sample_matrices(self) -> Tuple[List[str], np.ndarray]:
+        """Aggregate clustering results within each sample and stack into 3D array"""
+        sample_groups = self.results_df.groupby('sample_id')
+        samples = []
+        matrices = []
+        
+        for sample_id, group in sample_groups:
+            print(f"Processing sample {sample_id}: {len(group)} runs")
+            
+            # Use existing aggregation method with surprisal weighting
+            freq_matrix = self._aggregate_clustering_results_with_surprisal(
+                group, f"sample_{sample_id}", use_surprisal_weighting=True
+            )
+            
+            if freq_matrix is not None:
+                samples.append(sample_id)  
+                matrices.append(freq_matrix.values)
+            else:
+                print(f"Warning: Failed to aggregate sample {sample_id}")
+        
+        if not matrices:
+            raise ValueError("No valid sample matrices generated")
+            
+        X = np.array(matrices)  # Shape: (S, n, n)
+        print(f"Stacked {len(samples)} sample matrices, shape: {X.shape}")
+        
+        return samples, X
+
+    def _generate_null_for_samples(self, samples: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate analytical null (mean and variance) for each sample independently"""
+        n_outlets = len(self.outlet_names)
+        S = len(samples)
+        
+        MU = np.zeros((S, n_outlets, n_outlets))
+        VAR = np.zeros((S, n_outlets, n_outlets))
+        
+        for s, sample_id in enumerate(samples):
+            sample_df = self.results_df[self.results_df['sample_id'] == sample_id]
+            K_s = len(sample_df)
+            
+            if K_s == 0:
+                continue
+                
+            print(f"Computing null for sample {sample_id}: {K_s} runs")
+            
+            # Apply the same analytical null formula as in the existing method
+            # but without final division by K (we'll divide by K when computing mean)
+            mean_sum = np.zeros((n_outlets, n_outlets))
+            var_sum = np.zeros((n_outlets, n_outlets))
+            
+            for _, row in sample_df.iterrows():
+                communities = row['communities']
+                if not communities:
+                    continue
+                
+                # Calculate cluster sizes
+                cluster_sizes = Counter(communities.values())
+                
+                # Calculate expectation and variance for this clustering
+                ex = ex2 = 0.0
+                for size in cluster_sizes.values():
+                    if size > 1:
+                        p = size * (size - 1) / (n_outlets * (n_outlets - 1))
+                        w = -np.log2(size / n_outlets)
+                        ex += p * w
+                        ex2 += p * w * w
+                var_x = ex2 - ex**2
+                
+                # Add to all valid pairs in this clustering
+                for i in range(n_outlets):
+                    if i not in communities:
+                        continue
+                    for j in range(i + 1, n_outlets):
+                        if j not in communities:
+                            continue
+                        mean_sum[i, j] += ex
+                        mean_sum[j, i] += ex
+                        var_sum[i, j] += var_x
+                        var_sum[j, i] += var_x
+            
+            # Store per-sample means and variances (not yet divided by K)
+            MU[s] = mean_sum / max(K_s, 1)
+            VAR[s] = var_sum / max(K_s, 1)
+        
+        return MU, VAR
+
+    def _create_outlet_mask(self, VAR: np.ndarray, min_sample_frac: float, 
+                           S: int) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+        """Create mask for testable pairs based on outlet coverage across samples"""
+        n_outlets = VAR.shape[1]
+        testable = np.zeros((n_outlets, n_outlets), dtype=bool)
+        masked_pairs = []
+        
+        for i in range(n_outlets):
+            for j in range(i + 1, n_outlets):
+                # Count samples where both outlets appear (non-zero variance)
+                valid_count = np.sum(VAR[:, i, j] > 0)
+                
+                if valid_count / S >= min_sample_frac:
+                    testable[i, j] = testable[j, i] = True
+                else:
+                    masked_pairs.append((i, j))
+        
+        print(f"Testable pairs: {np.sum(testable) // 2}, Masked pairs: {len(masked_pairs)}")
+        return testable, masked_pairs
+
+    def _compute_pvalues_across_samples(self, Y: np.ndarray, VAR: np.ndarray, 
+                                       testable: np.ndarray, test_method: str, 
+                                       S: int) -> np.ndarray:
+        """Compute p-values for testable pairs using specified statistical test"""
+        n_outlets = testable.shape[0]  
+        p_values = np.ones((n_outlets, n_outlets))
+        
+        rows, cols = np.where(np.triu(testable, k=1))
+        
+        for i, j in zip(rows, cols):
+            # Get residuals for this pair across samples
+            residuals = Y[:, i, j]
+            
+            # Only include samples where both outlets appear
+            valid_mask = VAR[:, i, j] > 0
+            valid_residuals = residuals[valid_mask]
+            
+            if len(valid_residuals) < 2:
+                continue  # Need at least 2 samples
+            
+            try:
+                if test_method == "wilcoxon":
+                    if np.all(valid_residuals == 0):
+                        p_val = 1.0
+                    else:
+                        _, p_val = wilcoxon(valid_residuals, alternative='two-sided')
+                else:  # t-test
+                    # Standard error from analytical variance
+                    valid_var = VAR[valid_mask, i, j]
+                    se = np.sqrt(valid_var.mean() / len(valid_residuals))
+                    if se > 0:
+                        _, p_val = ttest_1samp(valid_residuals, 0.0)
+                    else:
+                        p_val = 1.0
+                        
+                p_values[i, j] = p_values[j, i] = p_val
+                
+            except Exception as e:
+                print(f"Warning: Test failed for pair ({i}, {j}): {e}")
+                continue
+        
+        return p_values
+
+    def _apply_fdr_correction(self, p_values: np.ndarray, testable: np.ndarray, 
+                             alpha: float, n_outlets: int) -> Tuple[pd.DataFrame, List[Tuple[int, int]]]:
+        """Apply FDR correction and identify significant pairs"""
+        # Get upper triangular testable pairs
+        rows, cols = np.where(np.triu(testable, k=1))
+        testable_pvals = p_values[rows, cols]
+        
+        if len(testable_pvals) == 0:
+            p_adj_matrix = pd.DataFrame(np.ones((n_outlets, n_outlets)), 
+                                      index=self.outlet_names, columns=self.outlet_names)
+            return p_adj_matrix, []
+        
+        # FDR correction
+        reject, p_adj, _, _ = multipletests(testable_pvals, alpha=alpha, method='fdr_bh')
+        
+        # Build adjusted p-value matrix
+        p_adj_matrix_vals = np.ones((n_outlets, n_outlets))
+        p_adj_matrix_vals[rows, cols] = p_adj
+        p_adj_matrix_vals[cols, rows] = p_adj  # Symmetry
+        
+        p_adj_matrix = pd.DataFrame(p_adj_matrix_vals, 
+                                   index=self.outlet_names, columns=self.outlet_names)
+        
+        # Get significant pairs
+        significant_pairs = [(rows[k], cols[k]) for k, is_sig in enumerate(reject) if is_sig]
+        
+        print(f"FDR correction: {np.sum(reject)}/{len(testable_pvals)} pairs significant")
+        
+        return p_adj_matrix, significant_pairs
+
+    def _classify_significant_pairs(self, significant_pairs: List[Tuple[int, int]], 
+                                   obs_mean: np.ndarray, exp_mean: np.ndarray) -> Tuple[List[Dict], List[Dict]]:
+        """Classify significant pairs as high or low based on observed vs expected"""
+        high_pairs = []
+        low_pairs = []
+        
+        for i, j in significant_pairs:
+            observed = obs_mean[i, j]
+            expected = exp_mean[i, j]
+            deviation = observed - expected
+            
+            pair_info = {
+                'outlet1': self.outlet_names[i],
+                'outlet2': self.outlet_names[j],
+                'observed': observed,
+                'expected': expected,
+                'deviation': deviation
+            }
+            
+            if deviation > 0:
+                high_pairs.append(pair_info)
+            else:
+                low_pairs.append(pair_info)
+        
+        # Sort by absolute deviation
+        high_pairs.sort(key=lambda x: abs(x['deviation']), reverse=True)
+        low_pairs.sort(key=lambda x: abs(x['deviation']), reverse=True)
+        
+        return high_pairs, low_pairs
+
+    def _visualize_across_samples_results(self, p_adj_matrix: pd.DataFrame, 
+                                         testable: np.ndarray, alpha: float):
+        """Create visualization heatmaps for across-samples results"""
+        try:
+            # Significance heatmap (log scale)
+            log_p_values = -np.log10(p_adj_matrix.values)
+            log_p_values[p_adj_matrix.values == 1.0] = 0
+            
+            plt.figure(figsize=(8, 6))
+            sns.heatmap(log_p_values, square=True, cmap='viridis',
+                       cbar_kws={'label': '-log₁₀(p-value)'},
+                       xticklabels=self.outlet_names, yticklabels=self.outlet_names)
+            plt.title('Significance Across Samples\n(-log₁₀ adjusted p-values)', fontweight='bold')
+            plt.tick_params(axis='both', labelsize=6)
+            plt.tight_layout()
+            plt.savefig('results/significance_across_samples_heatmap.png', dpi=300, bbox_inches='tight')
+            plt.show()
+            
+            # Mask heatmap
+            plt.figure(figsize=(8, 6))  
+            sns.heatmap(testable.astype(int), cmap='RdBu_r', center=0.5, square=True,
+                       cbar_kws={'label': 'Testable (1) vs Masked (0)'},
+                       xticklabels=self.outlet_names, yticklabels=self.outlet_names)
+            plt.title('Sample Coverage Mask\n(Pairs with sufficient sample coverage)', fontweight='bold')
+            plt.tick_params(axis='both', labelsize=6)
+            plt.tight_layout()
+            plt.savefig('results/significance_across_samples_mask.png', dpi=300, bbox_inches='tight')
+            plt.show()
+            
+        except Exception as e:
+            print(f"Warning: Visualization failed: {e}")
