@@ -99,8 +99,8 @@ print("=== MEDIA BIAS NETWORK ANALYSIS ===")
 # experiment parameters (temporal sampling)
 data_dir = 'data/daily_cluster_matrices_min_6'
 # consecutive window configuration
-window_size = 60  # days per window
-step_size = 60    # non-overlapping windows; set < window_size for sliding windows
+window_size = 15  # days per window
+step_size = 15    # non-overlapping windows; set < window_size for sliding windows
 
 results_file = f'results/temporal_experiment_{window_size}win_{step_size}step.pkl'
 
@@ -432,6 +432,134 @@ low_pairs = significance_results['low_pairs']
 high_pairs = significance_results['high_pairs']
 significant_mask = significance_results['significant_mask']
 corrected_p_df = significance_results['corrected_p_df']
+
+# %%
+
+# =============================================================================
+# 7.1. SIGNIFICANCE ACROSS SAMPLES (NEW METHOD)
+# =============================================================================
+
+print("\n=== SIGNIFICANCE ACROSS SAMPLES ANALYSIS ===")
+
+# Apply the new analyze_significance_across_samples method
+try:
+    across_samples_results = analyzer.analyze_significance_across_samples(
+        alpha=0.05,
+        min_sample_frac=0.5,
+        test="auto"
+    )
+    
+    # Extract results
+    high_pairs_samples = across_samples_results['high_pairs']
+    low_pairs_samples = across_samples_results['low_pairs']
+    p_adj_matrix_samples = across_samples_results['p_adj_matrix']
+    n_samples = across_samples_results['n_samples']
+    masked_pairs_samples = across_samples_results['masked_pairs']
+    
+    print(f"\nACROSS-SAMPLES SIGNIFICANCE RESULTS:")
+    print(f"Analyzed {n_samples} independent samples")
+    print(f"High co-clustering pairs: {len(high_pairs_samples)}")
+    print(f"Low co-clustering pairs: {len(low_pairs_samples)}")
+    print(f"Masked pairs (insufficient coverage): {len(masked_pairs_samples)}")
+    
+    # Compare with method-replicate results
+    print(f"\nCOMPARISON WITH METHOD-REPLICATE ANALYSIS:")
+    print(f"Method-replicate high pairs: {len(high_pairs)}")
+    print(f"Method-replicate low pairs: {len(low_pairs)}")
+    print(f"Across-samples high pairs: {len(high_pairs_samples)}")
+    print(f"Across-samples low pairs: {len(low_pairs_samples)}")
+    
+    # Analyze overlap between the two approaches
+    if high_pairs and high_pairs_samples:
+        # Convert to sets for comparison
+        method_high_set = {(p['outlet1'], p['outlet2']) for p in high_pairs}
+        samples_high_set = {(p['outlet1'], p['outlet2']) for p in high_pairs_samples}
+        
+        overlap_high = method_high_set.intersection(samples_high_set)
+        method_only_high = method_high_set - samples_high_set
+        samples_only_high = samples_high_set - method_high_set
+        
+        print(f"\nHIGH CO-CLUSTERING PAIRS OVERLAP:")
+        print(f"Overlap between methods: {len(overlap_high)}")
+        print(f"Method-replicate only: {len(method_only_high)}")
+        print(f"Across-samples only: {len(samples_only_high)}")
+        
+        if overlap_high:
+            print(f"\nShared high co-clustering pairs:")
+            for outlet1, outlet2 in sorted(overlap_high):
+                print(f"  {outlet1} ↔ {outlet2}")
+    
+    if low_pairs and low_pairs_samples:
+        # Convert to sets for comparison
+        method_low_set = {(p['outlet1'], p['outlet2']) for p in low_pairs}
+        samples_low_set = {(p['outlet1'], p['outlet2']) for p in low_pairs_samples}
+        
+        overlap_low = method_low_set.intersection(samples_low_set)
+        method_only_low = method_low_set - samples_low_set
+        samples_only_low = samples_low_set - method_low_set
+        
+        print(f"\nLOW CO-CLUSTERING PAIRS OVERLAP:")
+        print(f"Overlap between methods: {len(overlap_low)}")
+        print(f"Method-replicate only: {len(method_only_low)}")
+        print(f"Across-samples only: {len(samples_only_low)}")
+        
+        if overlap_low:
+            print(f"\nShared low co-clustering pairs:")
+            for outlet1, outlet2 in sorted(overlap_low):
+                print(f"  {outlet1} ↔ {outlet2}")
+    
+    # Show top significant pairs from across-samples analysis
+    if high_pairs_samples:
+        print(f"\nTOP HIGH CO-CLUSTERING PAIRS (across-samples):")
+        for i, pair in enumerate(high_pairs_samples[:10], 1):
+            print(f"{i:2d}. {pair['outlet1']} ↔ {pair['outlet2']}: "
+                  f"obs={pair['observed']:.3f}, exp={pair['expected']:.3f}, "
+                  f"dev={pair['deviation']:.3f}")
+    
+    if low_pairs_samples:
+        print(f"\nTOP LOW CO-CLUSTERING PAIRS (across-samples):")
+        for i, pair in enumerate(low_pairs_samples[:10], 1):
+            print(f"{i:2d}. {pair['outlet1']} ↔ {pair['outlet2']}: "
+                  f"obs={pair['observed']:.3f}, exp={pair['expected']:.3f}, "
+                  f"dev={pair['deviation']:.3f}")
+    
+    # Create comparison visualization
+    fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+    
+    # 1. Method-replicate significance mask
+    sns.heatmap(significant_mask.astype(int), cmap='RdBu_r', center=0.5, square=True, ax=axes[0],
+                cbar_kws={'label': 'Significant (1) vs Non-significant (0)'},
+                xticklabels=analyzer.outlet_names, yticklabels=analyzer.outlet_names)
+    axes[0].set_title('Method-Replicate Significance\n(Current Analysis)', fontweight='bold')
+    axes[0].tick_params(axis='both', labelsize=6)
+    
+    # 2. Across-samples significance mask
+    samples_significant_mask = (p_adj_matrix_samples < 0.05).values
+    sns.heatmap(samples_significant_mask.astype(int), cmap='RdBu_r', center=0.5, square=True, ax=axes[1],
+                cbar_kws={'label': 'Significant (1) vs Non-significant (0)'},
+                xticklabels=analyzer.outlet_names, yticklabels=analyzer.outlet_names)
+    axes[1].set_title('Across-Samples Significance\n(New Analysis)', fontweight='bold')
+    axes[1].tick_params(axis='both', labelsize=6)
+    
+    # 3. Overlap comparison
+    # 1 = both significant, 0 = neither significant, 0.5 = only one significant
+    overlap_matrix = np.where(significant_mask & samples_significant_mask, 1.0,
+                             np.where(~significant_mask & ~samples_significant_mask, 0.0, 0.5))
+    sns.heatmap(overlap_matrix, cmap='RdYlBu_r', center=0.5, square=True, ax=axes[2],
+                cbar_kws={'label': 'Both (1), Neither (0), One only (0.5)'},
+                xticklabels=analyzer.outlet_names, yticklabels=analyzer.outlet_names)
+    axes[2].set_title('Significance Overlap\n(Blue=Both, Yellow=One only, Red=Neither)', fontweight='bold')
+    axes[2].tick_params(axis='both', labelsize=6)
+    
+    plt.tight_layout()
+    plt.savefig('results/significance_methods_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+except Exception as e:
+    print(f"Across-samples analysis failed: {e}")
+    import traceback
+    traceback.print_exc()
+    print("Continuing with method-replicate analysis only...")
 
 # %%
 
