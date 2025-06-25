@@ -489,6 +489,39 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
         if frequency_matrix_raw is None or frequency_matrix_weighted is None:
             return {'error': 'could not compute frequency matrices'}
         
+        # sort matrices by ward linkage for better visualization
+        from scipy.cluster.hierarchy import linkage, leaves_list
+        from scipy.spatial.distance import squareform
+        
+        # use weighted matrix for clustering order (more informative)
+        # normalize to [0,1] range first to avoid negative distances
+        freq_values = frequency_matrix_weighted.values.copy()
+        freq_max = np.max(freq_values)
+        if freq_max > 0:
+            freq_normalized = freq_values / freq_max
+        else:
+            freq_normalized = freq_values
+        
+        # create distance matrix (1 - similarity)
+        distance_matrix = 1 - freq_normalized
+        np.fill_diagonal(distance_matrix, 0)  # ensure diagonal is 0
+        
+        # ensure all distances are non-negative
+        distance_matrix = np.clip(distance_matrix, 0, None)
+        
+        try:
+            condensed_distances = squareform(distance_matrix)
+            ward_linkage = linkage(condensed_distances, method='ward')
+            optimal_order = leaves_list(ward_linkage)
+        except Exception as e:
+            print(f"Warning: Could not perform Ward clustering ({e}). Using original order.")
+            optimal_order = list(range(len(frequency_matrix_weighted)))
+        
+        # reorder both matrices
+        ordered_outlets = [frequency_matrix_weighted.index[i] for i in optimal_order]
+        frequency_matrix_raw = frequency_matrix_raw.loc[ordered_outlets, ordered_outlets]
+        frequency_matrix_weighted = frequency_matrix_weighted.loc[ordered_outlets, ordered_outlets]
+        
         # visualize comparison (simplified version)
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -502,14 +535,14 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
         sns.heatmap(frequency_matrix_raw, mask=frequency_matrix_raw.values == 0,
                    cmap=heatmap_cmap, square=True, ax=axes[0],
                    cbar_kws={'label': 'Raw Frequency'})
-        axes[0].set_title('Raw Co-clustering Frequency\\n(no surprisal weighting)', fontweight='bold')
+        axes[0].set_title('Raw Co-clustering Frequency\n(no surprisal weighting)', fontweight='bold')
         axes[0].tick_params(axis='both', labelsize=6)
         
         # 2. surprisal-weighted frequencies  
         sns.heatmap(frequency_matrix_weighted, mask=frequency_matrix_weighted.values == 0,
                    cmap=heatmap_cmap, square=True, ax=axes[1],
                    cbar_kws={'label': 'Surprisal-Weighted Frequency'})
-        axes[1].set_title('Surprisal-Weighted Co-clustering Frequency\\n(information-theoretic weighting)', fontweight='bold')
+        axes[1].set_title('Surprisal-Weighted Co-clustering Frequency\n(information-theoretic weighting)', fontweight='bold')
         axes[1].tick_params(axis='both', labelsize=6)
         
         # 3. difference matrix
@@ -518,7 +551,7 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
                                                          ['#C73E1D', '#F18F01', '#F7F7F7', '#6BAED6', '#2E86AB'], N=256)
         sns.heatmap(diff_matrix, cmap=diverging_cmap, center=0, square=True, ax=axes[2],
                    cbar_kws={'label': 'Difference (Weighted - Raw)'})
-        axes[2].set_title('Surprisal Weighting Effect\\n(Positive = Enhanced, Negative = Diminished)', fontweight='bold')
+        axes[2].set_title('Surprisal Weighting Effect\n(Positive = Enhanced, Negative = Diminished)', fontweight='bold')
         axes[2].tick_params(axis='both', labelsize=6)
         
         plt.tight_layout()
@@ -531,20 +564,20 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
         weighted_vals = frequency_matrix_weighted.values[off_diag_mask]
         diff_vals = diff_matrix.values[off_diag_mask]
         
-        print(f"\\nSURPRISAL WEIGHTING COMPARISON STATISTICS:")
+        print(f"\nSURPRISAL WEIGHTING COMPARISON STATISTICS:")
         print(f"Raw frequency matrix:")
         print(f"  Mean: {raw_vals.mean():.4f}")
         print(f"  Std:  {raw_vals.std():.4f}")
         print(f"  Max:  {raw_vals.max():.4f}")
         print(f"  Non-zero entries: {np.sum(raw_vals > 0)}")
         
-        print(f"\\nSurprisal-weighted frequency matrix:")
+        print(f"\nSurprisal-weighted frequency matrix:")
         print(f"  Mean: {weighted_vals.mean():.4f}")
         print(f"  Std:  {weighted_vals.std():.4f}")  
         print(f"  Max:  {weighted_vals.max():.4f}")
         print(f"  Non-zero entries: {np.sum(weighted_vals > 0)}")
         
-        print(f"\\nDifference (weighted - raw):")
+        print(f"\nDifference (weighted - raw):")
         print(f"  Mean: {diff_vals.mean():.4f}")
         print(f"  Std:  {diff_vals.std():.4f}")
         print(f"  Range: [{diff_vals.min():.4f}, {diff_vals.max():.4f}]")

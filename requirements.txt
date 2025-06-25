@@ -1,0 +1,15 @@
+    infomap==2.8.0
+    ipython==8.12.3
+    ipywidgets==8.1.7
+    leidenalg==0.10.2
+    matplotlib==3.10.3
+    networkx==3.4.2
+    numpy==2.3.1
+    pandas==2.3.0
+    plotly==6.1.2
+    python_igraph==0.11.9
+    python_louvain==0.16
+    scikit_learn==1.7.0
+    scipy==1.16.0
+    seaborn==0.13.2
+    statsmodels==0.14.4

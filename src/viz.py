@@ -12,12 +12,71 @@ import os
 from typing import Optional, List, Dict
 from scipy.cluster.hierarchy import linkage, dendrogram
 from scipy.spatial.distance import squareform
+from matplotlib.colors import LinearSegmentedColormap
 
 from .analysis import ResultsAnalyzer
 
-# set plotting defaults
+# =============================================================================
+# CONSISTENT COLOR PALETTE SETUP
+# =============================================================================
+
+# define consistent color palette for all visualizations
+COLORS = {
+    # primary analysis colors
+    'primary': '#2E86AB',      # blue for main data
+    'secondary': '#A23B72',    # purple for secondary data
+    'tertiary': '#F18F01',     # orange for tertiary/comparison
+    'quaternary': '#C73E1D',   # red for exclusions/negative
+    
+    # specific semantic colors
+    'exclusion_k1': '#C73E1D',        # red for k=1 exclusions
+    'exclusion_k49': '#F18F01',       # orange for k=49 exclusions
+    'frequency': '#2E86AB',           # blue for frequency data
+    'entropy': '#A23B72',             # purple for entropy data
+    'uncertainty_high': '#C73E1D',    # red for high uncertainty
+    'uncertainty_med': '#F18F01',     # orange for medium uncertainty
+    'uncertainty_low': '#2E86AB',     # blue for low uncertainty
+    
+    # statistical markers
+    'mean': '#C73E1D',         # red for means
+    'median': '#F18F01',       # orange for medians
+    'quartiles': '#2E86AB',    # blue for quartiles
+    
+    # neutral colors
+    'background': '#F7F7F7',   # light gray
+    'grid': '#CCCCCC',         # gray for grids
+    'text': '#333333'          # dark gray for text
+}
+
+# create color lists for multiple categories
+CATEGORICAL_COLORS = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#3A6B35', '#F4B942', '#8E44AD', '#E67E22']
+SEQUENTIAL_COLORS = ['#F7F7F7', '#BDD7E7', '#6BAED6', '#3182BD', '#08519C']  # light to dark blue
+DIVERGING_COLORS = ['#C73E1D', '#F18F01', '#F7F7F7', '#6BAED6', '#2E86AB']  # red-orange-white-blue
+
+# create custom colormaps
+HEATMAP_CMAP = LinearSegmentedColormap.from_list('custom_heatmap', 
+                                                ['#F7F7F7', '#F18F01', '#C73E1D'], N=256)
+ENTROPY_CMAP = LinearSegmentedColormap.from_list('custom_entropy', 
+                                                ['#F7F7F7', '#A23B72', '#2E86AB'], N=256)
+DIVERGING_CMAP = LinearSegmentedColormap.from_list('custom_diverging', DIVERGING_COLORS, N=256)
+
+# set style with consistent colors
 plt.style.use('default')
-sns.set_palette('husl')
+plt.rcParams.update({
+    'axes.prop_cycle': plt.cycler('color', CATEGORICAL_COLORS),
+    'axes.facecolor': COLORS['background'],
+    'figure.facecolor': 'white',
+    'axes.edgecolor': COLORS['text'],
+    'axes.labelcolor': COLORS['text'],
+    'text.color': COLORS['text'],
+    'xtick.color': COLORS['text'],
+    'ytick.color': COLORS['text'],
+    'grid.color': COLORS['grid'],
+    'grid.alpha': 0.3
+})
+
+# set seaborn palette to match
+sns.set_palette(CATEGORICAL_COLORS)
 
 
 class Visualizer:
@@ -473,4 +532,265 @@ class Visualizer:
         
         stable_groups = self.analyzer.find_stable_outlet_groups(frequency_threshold=0.6)
         print(f"Stable outlet groups: {len(stable_groups)}")
-        print("=" * 40) 
+        print("=" * 40)
+    
+    # ===== NETWORK VISUALIZATION METHODS =====
+    
+    def plot_significant_connections_network(self, high_pairs: List[Dict], low_pairs: List[Dict], 
+                                           outlet_names: List[str], figsize: tuple = (16, 12)) -> None:
+        """create network graph from significant connections"""
+        print("\\n=== NETWORK GRAPH OF SIGNIFICANT CONNECTIONS ===")
+        
+        # create network graph from significant connections
+        G = nx.Graph()
+        
+        # add all outlets as nodes
+        for outlet in outlet_names:
+            G.add_node(outlet)
+        
+        # add edges for significant connections
+        high_edges = []
+        low_edges = []
+        
+        # add significantly HIGH co-clustering pairs
+        for pair in high_pairs:
+            outlet1, outlet2 = pair['outlet1'], pair['outlet2']
+            weight = pair['observed']
+            p_val = pair['p_value']
+            
+            G.add_edge(outlet1, outlet2, weight=weight, p_value=p_val, 
+                       edge_type='high', deviation=pair['deviation'])
+            high_edges.append((outlet1, outlet2))
+        
+        # add significantly LOW co-clustering pairs  
+        for pair in low_pairs:
+            outlet1, outlet2 = pair['outlet1'], pair['outlet2']
+            weight = pair['observed']
+            p_val = pair['p_value']
+            
+            G.add_edge(outlet1, outlet2, weight=weight, p_value=p_val, 
+                       edge_type='low', deviation=pair['deviation'])
+            low_edges.append((outlet1, outlet2))
+        
+        print(f"Network created with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+        print(f"  Significantly HIGH co-clustering edges: {len(high_edges)}")
+        print(f"  Significantly LOW co-clustering edges: {len(low_edges)}")
+        
+        # create the network visualization
+        self._setup_plot(figsize)
+        
+        # use spring layout for better visualization
+        pos = nx.spring_layout(G, k=3, iterations=50, seed=42)
+        
+        # draw nodes
+        nx.draw_networkx_nodes(G, pos, node_color=COLORS['primary'], 
+                               node_size=800, alpha=0.8, edgecolors=COLORS['text'])
+        
+        # draw edges with different colors for high vs low significance
+        if high_edges:
+            nx.draw_networkx_edges(G, pos, edgelist=high_edges, 
+                                  edge_color=COLORS['secondary'], width=2, alpha=0.7,
+                                  label='Significantly HIGH co-clustering')
+        
+        if low_edges:
+            nx.draw_networkx_edges(G, pos, edgelist=low_edges, 
+                                  edge_color=COLORS['quaternary'], width=1, alpha=0.7,
+                                  style='dashed', label='Significantly LOW co-clustering')
+        
+        # draw labels
+        nx.draw_networkx_labels(G, pos, font_size=9, font_weight='bold', 
+                               font_color=COLORS['text'])
+        
+        plt.title('Network Graph of Statistically Significant Co-clustering Relationships\\n' +
+                  f'({len(high_edges)} high-significance, {len(low_edges)} low-significance connections)',
+                  fontsize=14, fontweight='bold', pad=20)
+        
+        # add legend
+        if high_edges or low_edges:
+            plt.legend(loc='upper right', bbox_to_anchor=(1, 1))
+        
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'significant_connections_network.png'), 
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # analyze network properties
+        print(f"\\nNetwork Analysis:")
+        print(f"  Nodes (outlets): {G.number_of_nodes()}")
+        print(f"  Edges (significant connections): {G.number_of_edges()}")
+        print(f"  Network density: {nx.density(G):.3f}")
+        print(f"  Connected components: {nx.number_connected_components(G)}")
+        
+        # identify highly connected outlets
+        degree_centrality = nx.degree_centrality(G)
+        betweenness_centrality = nx.betweenness_centrality(G)
+        
+        print(f"\\nMost connected outlets (by degree centrality):")
+        for outlet, centrality in sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10]:
+            degree = G.degree(outlet)
+            print(f"  {outlet}: {degree} connections (centrality: {centrality:.3f})")
+        
+        print(f"\\nMost influential outlets (by betweenness centrality):")
+        for outlet, centrality in sorted(betweenness_centrality.items(), key=lambda x: x[1], reverse=True)[:10]:
+            if centrality > 0:
+                print(f"  {outlet}: {centrality:.3f}")
+        
+        return G
+    
+    def plot_high_clustering_network(self, high_pairs: List[Dict], outlet_names: List[str], 
+                                   figsize: tuple = (16, 12)) -> None:
+        """create focused network showing only high co-clustering relationships"""
+        print("\\n=== FOCUSED GRAPH: HIGH CO-CLUSTERING RELATIONSHIPS ONLY ===")
+        
+        if not high_pairs:
+            print("No significantly high co-clustering pairs found to visualize")
+            return
+            
+        # create network with only high co-clustering relationships
+        G_high_only = nx.Graph()
+        
+        # add all outlets as nodes first
+        for outlet in outlet_names:
+            G_high_only.add_node(outlet)
+        
+        # add only significantly HIGH co-clustering edges
+        high_edges_only = []
+        for pair in high_pairs:
+            outlet1, outlet2 = pair['outlet1'], pair['outlet2']
+            weight = pair['observed']
+            p_val = pair['p_value']
+            
+            G_high_only.add_edge(outlet1, outlet2, weight=weight, p_value=p_val, 
+                                 deviation=pair['deviation'])
+            high_edges_only.append((outlet1, outlet2))
+        
+        print(f"High co-clustering network: {G_high_only.number_of_nodes()} nodes, {G_high_only.number_of_edges()} edges")
+        
+        # create layout optimized for this network
+        self._setup_plot(figsize)
+        
+        # use different layout depending on network density
+        if nx.density(G_high_only) > 0.3:
+            pos_high = nx.kamada_kawai_layout(G_high_only)
+        else:
+            pos_high = nx.spring_layout(G_high_only, k=2, iterations=100, seed=42)
+        
+        # calculate node sizes based on degree (number of high-significance connections)
+        degrees = dict(G_high_only.degree())
+        node_sizes = [degrees[node] * 150 + 400 for node in G_high_only.nodes()]
+        
+        # create color mapping based on degree
+        max_degree = max(degrees.values()) if degrees.values() else 1
+        node_colors = [degrees[node] / max_degree for node in G_high_only.nodes()]
+        
+        # draw nodes with size and color based on connectivity
+        nodes = nx.draw_networkx_nodes(G_high_only, pos_high, 
+                                      node_size=node_sizes,
+                                      node_color=node_colors,
+                                      cmap=plt.cm.Blues,
+                                      alpha=0.8, 
+                                      edgecolors=COLORS['text'],
+                                      linewidths=2)
+        
+        # draw edges with thickness based on co-clustering strength
+        edge_weights = [G_high_only[u][v]['weight'] for u, v in high_edges_only]
+        max_weight = max(edge_weights) if edge_weights else 1
+        edge_widths = [3 * (w / max_weight) + 1 for w in edge_weights]  # scale edge thickness
+        
+        nx.draw_networkx_edges(G_high_only, pos_high, edgelist=high_edges_only,
+                              edge_color=COLORS['secondary'], width=edge_widths, 
+                              alpha=0.7)
+        
+        # draw labels
+        nx.draw_networkx_labels(G_high_only, pos_high, font_size=10, font_weight='bold', 
+                               font_color=COLORS['text'])
+        
+        plt.title('Media Outlets with Statistically Higher Than Expected Co-clustering\\n' +
+                  f'({len(high_edges_only)} significant relationships, α = 0.05)',
+                  fontsize=16, fontweight='bold', pad=20)
+        
+        # add colorbar for node colors
+        if max_degree > 1:
+            cbar = plt.colorbar(nodes, shrink=0.8, pad=0.1)
+            cbar.set_label('Number of High-Significance Connections', fontweight='bold')
+        
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'high_coclustering_network.png'), 
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # analyze the high co-clustering network
+        print(f"\\nHigh Co-clustering Network Analysis:")
+        print(f"  Network density: {nx.density(G_high_only):.3f}")
+        print(f"  Connected components: {nx.number_connected_components(G_high_only)}")
+        
+        # identify most connected outlets in high co-clustering
+        high_degree_centrality = nx.degree_centrality(G_high_only)
+        
+        print(f"\\nOutlets with most high-significance connections:")
+        for outlet, centrality in sorted(high_degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10]:
+            degree = G_high_only.degree(outlet)
+            if degree > 0:
+                print(f"  {outlet}: {degree} high-significance connections")
+        
+        # community detection on high co-clustering network
+        if G_high_only.number_of_edges() > 0:
+            # remove isolated nodes (no edges)
+            G_connected = G_high_only.copy()
+            isolated_nodes = [node for node in G_connected.nodes() if G_connected.degree(node) == 0]
+            G_connected.remove_nodes_from(isolated_nodes)
+            
+            print(f"Removed {len(isolated_nodes)} isolated nodes for community detection")
+            
+            try:
+                from networkx.algorithms import community
+                communities_high = community.greedy_modularity_communities(G_connected)
+                modularity = community.modularity(G_connected, communities_high)
+                
+                print(f"\\nCommunity Detection Results:")
+                print(f"  Found {len(communities_high)} communities (modularity: {modularity:.3f})")
+                for i, comm in enumerate(communities_high, 1):
+                    if len(comm) > 1:
+                        print(f"  Community {i}: {', '.join(sorted(comm))}")
+                
+                # visualize communities (only connected nodes)
+                self._setup_plot((14, 10))
+                pos_comm = nx.spring_layout(G_connected, k=2, iterations=100, seed=42)
+                
+                # assign colors to communities
+                colors = plt.cm.Set3(np.linspace(0, 1, len(communities_high)))
+                node_colors = []
+                for node in G_connected.nodes():
+                    for i, comm in enumerate(communities_high):
+                        if node in comm:
+                            node_colors.append(colors[i])
+                            break
+                
+                # draw network with community colors
+                nx.draw_networkx_nodes(G_connected, pos_comm, node_color=node_colors, 
+                                     node_size=600, alpha=0.8, edgecolors='black')
+                nx.draw_networkx_edges(G_connected, pos_comm, alpha=0.6, edge_color='gray')
+                nx.draw_networkx_labels(G_connected, pos_comm, font_size=9, font_weight='bold')
+                
+                plt.title(f'Community Structure in High Co-clustering Network\\n'
+                         f'({len(communities_high)} communities, modularity = {modularity:.3f})',
+                         fontweight='bold', fontsize=14)
+                plt.axis('off')
+                plt.tight_layout()
+                plt.savefig(os.path.join(self.output_dir, 'high_coclustering_communities.png'), 
+                            dpi=300, bbox_inches='tight')
+                plt.show()
+                
+            except Exception as e:
+                print(f"Community detection failed: {e}")
+        
+        # show strongest co-clustering pairs
+        print(f"\\nStrongest high co-clustering relationships:")
+        high_pairs_sorted = sorted(high_pairs, key=lambda x: x['observed'], reverse=True)
+        for i, pair in enumerate(high_pairs_sorted[:10], 1):
+            print(f"  {i:2d}. {pair['outlet1']} ↔ {pair['outlet2']}: "
+                  f"frequency={pair['observed']:.3f}, p={pair['p_value']:.6f}")
+        
+        return G_high_only 

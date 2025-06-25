@@ -189,10 +189,10 @@ class StabilityAnalyzer:
 
     def _visualize_exclusions(self, network_exclusions, community_exclusions, colors):
         """Create visualization for exclusion analysis."""
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
         # 1. network method exclusions (stacked bar)
-        ax1 = axes[0, 0]
+        ax1 = axes[0]
         methods_net = network_exclusions['method']
         k1_fractions_net = network_exclusions['k1_fraction']
         k49_fractions_net = network_exclusions['k49plus_fraction']
@@ -210,7 +210,7 @@ class StabilityAnalyzer:
         ax1.grid(True, alpha=0.3, axis='y')
 
         # 2. community method exclusions (stacked bar)
-        ax2 = axes[0, 1]
+        ax2 = axes[1]
         methods_comm = community_exclusions['method']
         k1_fractions_comm = community_exclusions['k1_fraction']
         k49_fractions_comm = community_exclusions['k49plus_fraction']
@@ -226,30 +226,6 @@ class StabilityAnalyzer:
         ax2.set_xticklabels(methods_comm, rotation=45, ha='right')
         ax2.legend()
         ax2.grid(True, alpha=0.3, axis='y')
-
-        # 3. network method total counts
-        ax3 = axes[1, 0]
-        total_counts = network_exclusions['total']
-        x_pos_net = np.arange(len(network_exclusions))
-        ax3.bar(x_pos_net, total_counts, color=colors['frequency'], alpha=0.8)
-        ax3.set_xlabel('Network Method')
-        ax3.set_ylabel('Total Results')
-        ax3.set_title('Total Results by Network Method', fontweight='bold')
-        ax3.set_xticks(x_pos_net)
-        ax3.set_xticklabels(network_exclusions['method'], rotation=45, ha='right')
-        ax3.grid(True, alpha=0.3, axis='y')
-
-        # 4. community method total counts
-        ax4 = axes[1, 1]
-        total_counts = community_exclusions['total']
-        x_pos_comm = np.arange(len(community_exclusions))
-        ax4.bar(x_pos_comm, total_counts, color=colors['frequency'], alpha=0.8)
-        ax4.set_xlabel('Community Method')
-        ax4.set_ylabel('Total Results')
-        ax4.set_title('Total Results by Community Method', fontweight='bold')
-        ax4.set_xticks(x_pos_comm)
-        ax4.set_xticklabels(community_exclusions['method'], rotation=45, ha='right')
-        ax4.grid(True, alpha=0.3, axis='y')
 
         plt.tight_layout()
         plt.savefig('results/exclusion_analysis.png', dpi=300, bbox_inches='tight')
