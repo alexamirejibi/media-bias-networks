@@ -55,11 +55,6 @@ class NetworkBuilder:
         method_func = registry.get_network_method(method)
         return method_func(self.data)
     
-    @staticmethod
-    def list_available_methods() -> List[str]:
-        """list all registered network methods"""
-        return registry.get_network_methods()
-
 
 class CommunityDetector:
     """detects communities using registered methods"""
@@ -116,7 +111,3 @@ class CommunityDetector:
         adj_array = np.nan_to_num(adj_array, nan=0.0, posinf=0.0, neginf=0.0)
         return method_func(adj_array, params)
     
-    @staticmethod
-    def list_available_methods() -> List[str]:
-        """list all registered community methods"""
-        return registry.get_community_methods() 

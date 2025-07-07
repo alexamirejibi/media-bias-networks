@@ -14,7 +14,7 @@ warnings.filterwarnings('ignore')
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from ..partition_metrics import all_metrics as partition_all_metrics
+# from ..partition_metrics import all_metrics as partition_all_metrics
 
 
 class CoreResultsAnalyzer:
@@ -385,43 +385,12 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
                           param_id: str, metric: str = 'ari') -> Dict[str, float]:
         """measure consistency of a method across different samples"""
         return self.stability_analyzer.method_consistency(network_method, community_method, param_id, metric)
-    
-    def calculate_method_similarity(self, sample_id: str, network_method: str, 
-                                   metric: str = 'ari') -> pd.DataFrame:
-        """calculate pairwise similarity between all community detection methods"""
-        return self.stability_analyzer.calculate_method_similarity(sample_id, network_method, metric)
-    
-    def compare_method_performance(self) -> pd.DataFrame:
-        """compare average performance across methods"""
-        return self.stability_analyzer.compare_method_performance()
-    
+            
     def analyze_exclusions(self, colors: dict, min_communities: int = 2, max_communities: int = 48):
         """analyze and visualize method exclusions before applying filter"""
         return self.stability_analyzer.analyze_exclusions(colors, min_communities, max_communities)
-    
-    def outlet_clustering_frequency(self, min_frequency: float = 0.0, 
-                                   normalize: bool = True) -> pd.DataFrame:
-        """calculate how frequently outlets cluster together across all analyses"""
-        return self.stability_analyzer.outlet_clustering_frequency(min_frequency, normalize)
-    
-    def validate_null_distribution(self, n_permutations: int = 5000, 
-                                 clustering_index: int = 0, 
-                                 random_state: Optional[int] = None,
-                                 save_path: Optional[str] = None, 
-                                 show_plot: bool = True) -> Dict[str, Any]:
-        """validate analytical null distribution against empirical permutation test"""
-        return self.stability_analyzer.validate_null_distribution(
-            n_permutations, clustering_index, random_state, save_path, show_plot)
-    
-    # Statistical methods - delegate to statistics_analyzer
-    def analyze_statistical_significance(self, frequency_matrix_weighted: pd.DataFrame, 
-                                       colors: dict, n_permutations: int = 1000, 
-                                       alpha: float = 0.05, use_joint_permutation_cov: bool = True, 
-                                       cov_permutations: int = 5000) -> Dict[str, Any]:
-        """perform statistical significance testing using permutation tests with surprisal weighting"""
-        return self.statistics_analyzer.analyze_statistical_significance(
-            frequency_matrix_weighted, colors, n_permutations, alpha, use_joint_permutation_cov, cov_permutations)
-    
+            
+    # Statistical methods - delegate to statistics_analyzer    
     def analyze_significance_across_samples(self, alpha: float = 0.05, 
                                           min_sample_frac: float = 0.5,
                                           test: str = "auto") -> Dict[str, Any]:
@@ -454,10 +423,6 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
         """compare co-clustering patterns between different methods"""
         return self.clustering_analyzer.compare_method_coclustering(frequency_matrices)
     
-    def find_stable_outlet_groups(self, frequency_threshold: float = 0.7, 
-                                 min_group_size: int = 2) -> Dict[str, List[str]]:
-        """identify stable outlet communities that appear frequently together"""
-        return self.clustering_analyzer.find_stable_outlet_groups(frequency_threshold, min_group_size)
     
     # Temporal methods - delegate to temporal_analyzer
     def temporal_stability(self, window_ids: List[str], metric: str = 'ari', n_clusters: int = 6) -> pd.DataFrame:
@@ -467,12 +432,7 @@ class ResultsAnalyzer(CoreResultsAnalyzer):
     def analyze_temporal_drift(self, window_ids: List[str], metric: str = 'ari') -> Dict[str, Any]:
         """analyze temporal drift patterns between consecutive windows"""
         return self.temporal_analyzer.analyze_temporal_drift(window_ids, metric)
-    
-    def empirical_null_for_pair(self, pair: Tuple[int, int], n_permutations: int = 2000,
-                                 random_state: Optional[int] = None) -> Dict[str, float]:
-        """empirically estimate null mean/std for aggregated mean across all clusterings"""
-        return self.temporal_analyzer.empirical_null_for_pair(pair, n_permutations, random_state)
-    
+        
     def analyze_window_stability_trends(self, window_ids: List[str]) -> Dict[str, Any]:
         """analyze trends in stability across temporal windows"""
         return self.temporal_analyzer.analyze_window_stability_trends(window_ids)

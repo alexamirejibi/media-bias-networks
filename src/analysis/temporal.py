@@ -119,62 +119,6 @@ class TemporalAnalyzer:
             'metric': metric
         }
     
-    def empirical_null_for_pair(self, pair: Tuple[int, int], n_permutations: int = 2000,
-                                 random_state: Optional[int] = None) -> Dict[str, float]:
-        """empirically estimate null mean/std for aggregated mean across all clusterings
-
-        shuffles labels independently inside every clustering for each permutation, then
-        computes the aggregated mean (with surprisal weights) for the chosen outlet pair.
-        returns empirical mean and std so that one can compare with analytical values.
-        """
-        rng = np.random.default_rng(random_state)
-
-        if self.core.results_df.empty or self.core.outlet_names is None:
-            print('no results in analyzer')
-            return {}
-
-        i, j = pair
-        if i == j:
-            print('pair must have i != j')
-            return {}
-        n_outlets = len(self.core.outlet_names)
-        K = len(self.core.results_df)
-
-        # gather cluster size lists per clustering for faster sampling
-        cluster_size_lists = []
-        for _, row in self.core.results_df.iterrows():
-            communities = row['communities']
-            if not communities:
-                cluster_size_lists.append([])
-                continue
-            sizes = list(Counter(communities.values()).values())
-            cluster_size_lists.append(sizes)
-
-        samples = np.empty(n_permutations, dtype=float)
-        label_buffer = np.empty(n_outlets, dtype=int)
-
-        for p in range(n_permutations):
-            total_weight = 0.0
-            for sizes in cluster_size_lists:
-                # build label array for this clustering following its size distribution
-                idx = 0
-                for cid, size in enumerate(sizes):
-                    label_buffer[idx:idx+size] = cid
-                    idx += size
-                if idx < n_outlets:
-                    label_buffer[idx:n_outlets] = np.arange(cid+1, cid+1 + (n_outlets-idx))
-                    idx = n_outlets
-                rng.shuffle(label_buffer)
-                if label_buffer[i] == label_buffer[j]:
-                    size = np.sum(label_buffer == label_buffer[i])
-                    weight = -np.log2(size / n_outlets)
-                    total_weight += weight
-            samples[p] = total_weight / K
-
-        return {
-            'empirical_mean': float(samples.mean()),
-            'empirical_std': float(samples.std(ddof=1))
-        }
     
     def _estimate_joint_permutation_mean_std(self, n_permutations: int = 5000,
                                              random_state: Optional[int] = None,

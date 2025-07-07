@@ -346,23 +346,3 @@ class ClusteringAnalyzer:
             'most_similar_pair': (method_names[most_similar_i], method_names[most_similar_j]),
             'most_different_pair': (method_names[most_different_i], method_names[most_different_j])
         }
-
-    def find_stable_outlet_groups(self, frequency_threshold: float = 0.7, 
-                                 min_group_size: int = 2) -> Dict[str, List[str]]:
-        """identify stable outlet communities that appear frequently together"""
-        
-        cooccurrence = self.core.outlet_clustering_frequency(min_frequency=frequency_threshold)
-        
-        if cooccurrence.empty:
-            return {}
-        
-        # find connected components in thresholded matrix
-        G = nx.from_pandas_adjacency(cooccurrence)
-        stable_groups = {}
-        
-        for i, component in enumerate(nx.connected_components(G)):
-            if len(component) >= min_group_size:
-                group_name = f"stable_group_{i+1}"
-                stable_groups[group_name] = sorted(list(component))
-        
-        return stable_groups
