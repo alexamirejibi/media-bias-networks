@@ -3,9 +3,9 @@
 Please see the full_analysis.ipynb file for the complete experiment.
 
 ## Code guide (src)
-- data.py: main data management
 - ★ experiment.py: main experiment framework
 - ★ methods.py: contains all community detection network modelling methods; uses a plugin system
+- data.py: data management utils
 - plugins.py: actual plugin management code
 - networks.py: main code for building adjacencies and running community detection methods from methods.py (using the plugin system)
 - partition_metrics.py: parition metrics (NMI, ARI, confusion matrix calculation)
