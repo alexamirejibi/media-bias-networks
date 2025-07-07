@@ -57,7 +57,7 @@ class StatisticsAnalyzer:
         1) builds a surprisal-weighted co-clustering matrix **per sample**,
         2) derives an analytical null distribution for every sample (mean & variance),
         3) computes residuals across samples and applies a paired parametric/non-parametric
-           test (t-test for S≥15, Wilcoxon otherwise),
+           test (t-test for S≥15, Wilcoxon otherwise). Note: we use the Wilcoxon test.
         4) corrects p-values with Benjamini–Hochberg FDR and classifies significant
            pairs as *high* (more than expected) or *low* (less than expected).
         """
