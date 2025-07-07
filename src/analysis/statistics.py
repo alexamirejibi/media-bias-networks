@@ -14,15 +14,6 @@ import time
 import networkx as nx
 from matplotlib.colors import LinearSegmentedColormap
 
-# -----------------------------------------------------------------------------
-# scipy compatibility utilities
-# -----------------------------------------------------------------------------
-# ``scipy.stats.binom_test`` was deprecated in SciPy 1.7 and removed entirely in
-# SciPy 2.0.  Its replacement, ``scipy.stats.binomtest``, returns an object with
-# a ``pvalue`` attribute.  To avoid littering the codebase with version checks
-# (and to preserve the original API expected elsewhere in *statistics.py*), we
-# define a thin wrapper that emulates the old behaviour when necessary.
-
 try:
     # available in SciPy < 2.0
     from scipy.stats import binom_test  # type: ignore
@@ -57,254 +48,6 @@ class StatisticsAnalyzer:
     def __init__(self, core_analyzer):
         self.core = core_analyzer
     
-    def analyze_statistical_significance(self, frequency_matrix_weighted: pd.DataFrame, 
-                                       colors: dict, n_permutations: int = 1000, 
-                                       alpha: float = 0.05, use_joint_permutation_cov: bool = True, 
-                                       cov_permutations: int = 5000) -> Dict[str, Any]:
-        """perform statistical significance testing using permutation tests with surprisal weighting"""
-        print("\n=== STATISTICAL SIGNIFICANCE TESTING ===")
-        
-        def partition_to_coclustering_matrix(partition, n_outlets):
-            """convert partition to binary co-clustering matrix"""
-            assignments = np.full(n_outlets, -1, dtype=int)
-            for outlet_id, community_id in partition.items():
-                if outlet_id < n_outlets:
-                    assignments[outlet_id] = community_id
-            
-            valid_mask = assignments >= 0
-            assignments_2d = assignments[:, np.newaxis]
-            assignments_broadcast = assignments[np.newaxis, :]
-            
-            matrix = ((assignments_2d == assignments_broadcast) & 
-                      valid_mask[:, np.newaxis] & 
-                      valid_mask[np.newaxis, :]).astype(int)
-            
-            return matrix
-
-        def generate_null_distribution(analyzer):
-            """analytical pair-specific null (mean & std) with correct Var(\bar X)=Var(X)/K"""
-            start = time.time()
-            df = analyzer.get_results()
-            n_out = len(analyzer.outlet_names)
-            K = len(df)
-
-            print("pair-specific analytical null (corrected variance)")
-            print(f"processing {K} clustering results")
-
-            mean_sum = np.zeros((n_out, n_out))
-            var_sum  = np.zeros((n_out, n_out))
-
-            for _, row in df.iterrows():
-                comm = row['communities']
-                if not comm:
-                    continue
-                sizes = Counter(comm.values())
-                ex = ex2 = 0.0
-                for sz in sizes.values():
-                    if sz > 1:
-                        p = sz*(sz-1)/(n_out*(n_out-1))
-                        w = -np.log2(sz / n_out)
-                        ex  += p * w
-                        ex2 += p * w * w
-                var_x = ex2 - ex**2
-                for i in range(n_out):
-                    if i not in comm: continue
-                    for j in range(i+1, n_out):
-                        if j not in comm: continue
-                        mean_sum[i,j] += ex
-                        mean_sum[j,i] += ex
-                        var_sum[i,j]  += var_x
-                        var_sum[j,i]  += var_x
-
-            mean_mat = mean_sum / max(K,1)
-            var_mat  = (var_sum / max(K,1)) / max(K,1)  # Var(mean) = Var(X)/K
-            std_mat  = np.sqrt(np.maximum(var_mat, 1e-10))
-
-            np.fill_diagonal(mean_mat, 0)
-            np.fill_diagonal(std_mat, 0)
-
-            tri = np.triu_indices(n_out,1)
-            g_mean = float(mean_mat[tri].mean()) if tri[0].size else 0.0
-            g_std  = float(std_mat[tri].mean()) if tri[0].size else 0.0
-
-            print(f"done in {time.time()-start:.2f}s | global mean {g_mean:.6f} | global std {g_std:.6f}")
-
-            return {
-                'mean_matrix': mean_mat,
-                'std_matrix': std_mat,
-                'global_mean': g_mean,
-                'global_std': g_std
-            }
-
-        # generate null distribution
-        null_dist = generate_null_distribution(self.core)
-        null_mean_matrix = null_dist['mean_matrix']
-        null_std_matrix = null_dist['std_matrix']
-        null_mean = null_dist['global_mean']
-        null_std = null_dist['global_std']
-
-        print(f"null distribution: mean={null_mean:.6f}, std={null_std:.6f}")
-
-        # calculate z-scores and p-values for all pairs
-        print("\ncalculating statistical significance for all outlet pairs...")
-        
-        observed_matrix = frequency_matrix_weighted.values
-        n_outlets = len(frequency_matrix_weighted)
-        
-        # handle edge case of zero standard deviation
-        safe_std_matrix = np.where(null_std_matrix > 1e-10, null_std_matrix, 1e-10)
-        
-        # calculate z-scores
-        z_scores = (observed_matrix - null_mean_matrix) / safe_std_matrix
-        
-        # calculate two-tailed p-values (using standard normal distribution)
-        from scipy.stats import norm
-        p_values = 2 * (1 - norm.cdf(np.abs(z_scores)))
-        
-        # set diagonal to 1 (no self-comparison)
-        np.fill_diagonal(p_values, 1.0)
-        np.fill_diagonal(z_scores, 0.0)
-        
-        # collect all valid off-diagonal p-values for multiple testing correction
-        off_diag_mask = ~np.eye(n_outlets, dtype=bool)
-        off_diag_p_values = p_values[off_diag_mask]
-        
-        print(f"testing {len(off_diag_p_values)} outlet pairs for significance")
-        
-        # benjamini-hochberg correction for multiple testing
-        rejected, corrected_p_values, _, _ = multipletests(off_diag_p_values, 
-                                                          alpha=alpha, 
-                                                          method='fdr_bh')
-        
-        # reconstruct corrected p-value matrix
-        corrected_p_matrix = np.ones((n_outlets, n_outlets))
-        corrected_p_matrix[off_diag_mask] = corrected_p_values
-        corrected_p_df = pd.DataFrame(corrected_p_matrix, 
-                                    index=frequency_matrix_weighted.index,
-                                    columns=frequency_matrix_weighted.columns)
-        
-        # identify significant pairs
-        significant_mask = corrected_p_matrix < alpha
-        np.fill_diagonal(significant_mask, False)  # exclude diagonal
-        
-        n_significant = np.sum(significant_mask)
-        print(f"found {n_significant} significant pairs after FDR correction (α = {alpha})")
-        
-        # categorize significant pairs into high and low co-clustering
-        high_pairs = []
-        low_pairs = []
-        
-        for i in range(n_outlets):
-            for j in range(i+1, n_outlets):  # upper triangle only
-                if significant_mask[i, j]:
-                    outlet1 = frequency_matrix_weighted.index[i]
-                    outlet2 = frequency_matrix_weighted.index[j]
-                    observed = observed_matrix[i, j]
-                    expected = null_mean_matrix[i, j]
-                    p_val = corrected_p_matrix[i, j]
-                    z_score = z_scores[i, j]
-                    deviation = observed - expected
-                    
-                    pair_info = {
-                        'outlet1': outlet1,
-                        'outlet2': outlet2,
-                        'observed': observed,
-                        'expected': expected,
-                        'deviation': deviation,
-                        'z_score': z_score,
-                        'p_value': p_val
-                    }
-                    
-                    if deviation > 0:  # higher than expected
-                        high_pairs.append(pair_info)
-                    else:  # lower than expected
-                        low_pairs.append(pair_info)
-        
-        # sort by absolute deviation
-        high_pairs.sort(key=lambda x: x['deviation'], reverse=True)
-        low_pairs.sort(key=lambda x: x['deviation'])  # most negative first
-        
-        print(f"\nsignificant pairs breakdown:")
-        print(f"  high co-clustering (more than expected): {len(high_pairs)}")
-        print(f"  low co-clustering (less than expected): {len(low_pairs)}")
-        
-        # display top results
-        if high_pairs:
-            print(f"\ntop 10 significantly HIGH co-clustering pairs:")
-            for i, pair in enumerate(high_pairs[:10], 1):
-                print(f"  {i:2d}. {pair['outlet1']} ↔ {pair['outlet2']}: "
-                      f"obs={pair['observed']:.3f}, exp={pair['expected']:.3f}, "
-                      f"dev=+{pair['deviation']:.3f}, p={pair['p_value']:.6f}")
-        
-        if low_pairs:
-            print(f"\ntop 10 significantly LOW co-clustering pairs:")
-            for i, pair in enumerate(low_pairs[:10], 1):
-                print(f"  {i:2d}. {pair['outlet1']} ↔ {pair['outlet2']}: "
-                      f"obs={pair['observed']:.3f}, exp={pair['expected']:.3f}, "
-                      f"dev={pair['deviation']:.3f}, p={pair['p_value']:.6f}")
-        
-        # create visualization
-        self._visualize_significance_results(
-            frequency_matrix_weighted, z_scores, significant_mask, 
-            corrected_p_df, high_pairs, low_pairs, colors, alpha
-        )
-        
-        return {
-            'z_scores': z_scores,
-            'p_values': p_values,
-            'corrected_p_values': corrected_p_values,
-            'corrected_p_df': corrected_p_df,
-            'significant_mask': significant_mask,
-            'high_pairs': high_pairs,
-            'low_pairs': low_pairs,
-            'n_significant': n_significant,
-            'null_mean': null_mean,
-            'null_std': null_std,
-            'null_mean_matrix': null_mean_matrix,
-            'null_std_matrix': null_std_matrix
-        }
-
-    def _visualize_significance_results(self, frequency_matrix, z_scores, significant_mask, 
-                                      corrected_p_df, high_pairs, low_pairs, colors, alpha):
-        """Create visualizations for significance testing results."""
-        
-        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-        
-        # 1. Original frequency matrix
-        heatmap_cmap = LinearSegmentedColormap.from_list('custom_heatmap', 
-                                                       ['#F7F7F7', '#F18F01', '#C73E1D'], N=256)
-        sns.heatmap(frequency_matrix, mask=frequency_matrix.values == 0, 
-                   cmap=heatmap_cmap, square=True, ax=axes[0,0],
-                   cbar_kws={'label': 'Co-clustering Frequency'})
-        axes[0,0].set_title('Original Co-clustering Frequency Matrix', fontweight='bold')
-        
-        # 2. Z-scores heatmap
-        diverging_cmap = LinearSegmentedColormap.from_list('custom_diverging', 
-                                                         ['#C73E1D', '#F18F01', '#F7F7F7', '#6BAED6', '#2E86AB'], N=256)
-        mask_z = np.eye(len(frequency_matrix), dtype=bool)
-        sns.heatmap(z_scores, mask=mask_z, cmap=diverging_cmap, center=0, 
-                   square=True, ax=axes[0,1], cbar_kws={'label': 'Z-score'})
-        axes[0,1].set_title('Z-scores (Observed - Expected) / Std', fontweight='bold')
-        
-        # 3. Significance mask
-        sns.heatmap(significant_mask.astype(int), cmap='RdBu_r', center=0.5, 
-                   square=True, ax=axes[1,0], cbar_kws={'label': 'Significant (1) vs Non-significant (0)'})
-        axes[1,0].set_title(f'Statistical Significance Mask (FDR α = {alpha})', fontweight='bold')
-        
-        # 4. Corrected p-values (log scale)
-        log_p_values = -np.log10(corrected_p_df.values + 1e-10)  # add small value to avoid log(0)
-        np.fill_diagonal(log_p_values, 0)  # set diagonal to 0
-        
-        sns.heatmap(log_p_values, cmap='viridis', square=True, ax=axes[1,1],
-                   cbar_kws={'label': '-log10(corrected p-value)'})
-        axes[1,1].set_title('Statistical Significance\n(Darker = More Significant)', fontweight='bold')
-        
-        for ax in axes.flat:
-            ax.tick_params(axis='both', labelsize=8)
-        
-        plt.tight_layout()
-        plt.savefig('results/statistical_significance_analysis.png', dpi=300, bbox_inches='tight')
-        plt.show()
 
     def analyze_significance_across_samples(self, alpha: float = 0.05,
                                            min_sample_frac: float = 0.5,
@@ -340,6 +83,8 @@ class StatisticsAnalyzer:
         # step B – aggregate within each sample
         # ------------------------------------------------------------------
         samples, X = self._stack_sample_matrices()
+        # samples: list of sample_id strings
+        # X: 3D array (n_samples, n_outlets, n_outlets) - surprisal-weighted co-clustering matrices
         S, n_outlets = len(samples), len(self.core.outlet_names)
 
         # ------------------------------------------------------------------
@@ -506,26 +251,9 @@ class StatisticsAnalyzer:
     def _compute_pvalues_across_samples(self, Y: np.ndarray, VAR: np.ndarray, testable: np.ndarray,
                                         test_method: str, S: int) -> np.ndarray:
         """Compute p-values for each testable pair using selected test.
-
-        Improvements over the original implementation:
-        1. Weighted t-test for heteroscedastic residuals (when ``test_method == 't'``)
-           – weights are inverse variances ``w_s = 1 / VAR``.
-        2. Deterministic zero-variance pairs: if all ``VAR == 0`` and the mean residual is non-zero,
-           we flag the pair as highly significant (p ≈ 0). If mean residual is exactly 0, p = 1.
-        3. Permutation fallback for very small sample sizes (``len(residuals) < 5``).
         """
         import numpy as np  # local import to avoid polluting module namespace
         from scipy import stats
-
-        def _permutation_pvalue(res, n_perm: int = 2000) -> float:
-            """Exact two-sided permutation test for mean of signed residuals."""
-            obs = abs(res.mean())
-            count = 0
-            for _ in range(n_perm):
-                signs = np.random.choice([-1, 1], size=res.size)
-                if abs((res * signs).mean()) >= obs:
-                    count += 1
-            return (count + 1) / (n_perm + 1)
 
         n_outlets = testable.shape[0]
         p_values = np.ones((n_outlets, n_outlets))
@@ -533,13 +261,6 @@ class StatisticsAnalyzer:
         for i, j in zip(rows, cols):
             residuals = Y[:, i, j]
             var_ij = VAR[:, i, j]
-
-            # case A – fully deterministic across samples
-            if np.all(var_ij == 0):
-                mean_res = residuals.mean()
-                p_val = 1.0 if np.isclose(mean_res, 0.0) else 1e-12
-                p_values[i, j] = p_values[j, i] = p_val
-                continue
 
             # select samples with positive variance for weighting
             valid_mask = var_ij > 0
@@ -554,27 +275,20 @@ class StatisticsAnalyzer:
                 if test_method == 'wilcoxon':
                     if np.all(valid_res == 0):
                         p_val = 1.0
-                    elif valid_res.size < 5:
-                        # permutation fallback
-                        p_val = _permutation_pvalue(valid_res)
                     else:
                         _, p_val = wilcoxon(valid_res, alternative='two-sided')
 
                 else:  # weighted t-test
-                    if valid_res.size < 5:
-                        # permutation fallback retains correct type-I error for tiny n
-                        p_val = _permutation_pvalue(valid_res)
+                    # weights: inverse variances (avoid divide-by-zero)
+                    weights = 1.0 / np.maximum(valid_var, 1e-12)
+                    mu_w = np.sum(weights * valid_res) / np.sum(weights)
+                    se_w = np.sqrt(1.0 / np.sum(weights))
+                    if se_w == 0:
+                        p_val = 1.0
                     else:
-                        # weights: inverse variances (avoid divide-by-zero)
-                        weights = 1.0 / np.maximum(valid_var, 1e-12)
-                        mu_w = np.sum(weights * valid_res) / np.sum(weights)
-                        se_w = np.sqrt(1.0 / np.sum(weights))
-                        if se_w == 0:
-                            p_val = 1.0
-                        else:
-                            t_stat = mu_w / se_w
-                            df = valid_res.size - 1  # conservative
-                            p_val = 2 * stats.t.sf(abs(t_stat), df)
+                        t_stat = mu_w / se_w
+                        df = valid_res.size - 1  # conservative
+                        p_val = 2 * stats.t.sf(abs(t_stat), df)
 
                 p_values[i, j] = p_values[j, i] = p_val
             except Exception as e:
@@ -650,6 +364,7 @@ class StatisticsAnalyzer:
             plt.show()
         except Exception as e:
             print(f"Warning: visualization failed: {e}")
+        
 
     def construct_validated_clustering(self, high_pairs: List[Dict], low_pairs: List[Dict], 
                                      null_mean: float, null_std: float, 

@@ -3,3 +3,4 @@ example.ipynb
 updated_script.py
 __pycache__
 .cursor
+.claude
